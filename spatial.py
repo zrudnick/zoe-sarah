@@ -77,7 +77,7 @@ def generate_basal_prod_rates(master_regulators, number_bins, target_ids):
                     basal_prod = np.round(np.random.uniform(0, 1), 2)
                 else: basal_prod = 0.01
                 master_regulators["receptor-TF"][reg].append(basal_prod)
-                master_regulators["no-ligand"][dummy_reg].append(0)
+                master_regulators["no-ligand"][dummy_reg].append(0.01)
             else:
                 index = 1 + (i - number_bins//2) # corresponding cell for reg
                 basal_prod = np.round((master_regulators["receptor-TF"][reg][index]), 2)
@@ -227,18 +227,24 @@ def run_umap(path):
     # show every cell type
     # reg and dummy_reg should light up compared to others
     
+    # for gene in range(4): # master regulators
+    adata = adata[["1","2", "3", "4"]]
     print(adata)
-    print(adata.obs)
-    print(adata.obs.columns)
-    print(adata.var)
-    print(adata.var_names)
-    for gene in range(4): # master regulators
-        adata_gene = adata[str(gene)]
-        adata_gene.var = adata.var
-        # sc.pp.pca(adata_gene)
-        sc.pp.neighbors(adata_gene, n_neighbors=1, use_rep='X')
-        sc.tl.umap(adata_gene)
-        sc.pl.umap(adata_gene, color="Cell Type")
+    # df = pd.DataFrame(adata.X)
+    # df = df.loc[:, df.nunique() > 1]
+    #adata = adata[["1","3"]]
+
+    #adata = ad.AnnData(X=expression_data, 
+                        #obs={"Gene": gene_ids}, 
+                        #var={"Cell ID": cell_ids, "Cell Type": cell_types})
+   
+    #adata = adata.obs["Gene"]
+    adata = ad.AnnData(X=adata.X.T, obs=adata.var, var=adata.obs)
+    
+    sc.pp.pca(adata, n_comps=3)
+    sc.pp.neighbors(adata, n_neighbors = 75)
+    sc.tl.umap(adata, min_dist=0.8)
+    sc.pl.umap(adata, color=["Cell ID", "1", "2", "3", "4"])
 
 def run(interaction_pairs, number_bins=2, number_sc=300, diff=False, bMat=None, 
         hill_coeff=1.0, interaction_strength=1.0):
