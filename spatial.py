@@ -74,7 +74,8 @@ def generate_basal_prod_rates(master_regulators, number_bins, target_ids):
             if (i < number_bins//2):
                 # one for each cell type
                 if (i == target_ids[reg]):
-                    basal_prod = np.round(np.random.uniform(0, 1), 2)
+                    #basal_prod = np.round(np.random.uniform(0, 1), 2)
+                    basal_prod = 1.0
                 else: basal_prod = 0.01
                 master_regulators["receptor-TF"][reg].append(basal_prod)
                 master_regulators["no-ligand"][dummy_reg].append(0.01)
@@ -191,11 +192,9 @@ def steady_state_technical_noise(sim, expr, num_master_regs):
     count_matrix = np.concatenate(count_matrix, axis = 1)
     # add bottom half to top half
 
-    for i in range(num_master_regs//2):
-        # Add the specified rows and update the original array
-        count_matrix[i] += count_matrix[i+(num_master_regs//2)]
-        # Remove the second row if needed
-        count_matrix = np.delete(count_matrix, i+(num_master_regs//2), axis=0)
+    # for i in range(num_master_regs//2):
+    #     count_matrix[i] += count_matrix[4]
+    #     count_matrix = np.delete(count_matrix, 4, axis=0)
     return count_matrix
 
 ##############################################
@@ -212,7 +211,7 @@ def make_h5ad(expression_data, ad_path, number_sc):
     cell_types = [(cell_id // number_sc) for cell_id in cell_ids]
     adata = ad.AnnData(X=expression_data, 
                         obs={'Gene': gene_ids}, 
-                        var={'Cell ID': cell_ids, 'Cell Type': cell_types})
+                        var={'Cell Type': cell_types})
     adata.write_h5ad(ad_path)
     return adata
     
@@ -228,23 +227,20 @@ def run_umap(path):
     # reg and dummy_reg should light up compared to others
     
     # for gene in range(4): # master regulators
-    adata = adata[["1","2", "3", "4"]]
-    print(adata)
+    # adata = adata[["0","1", "2", "3"]]
+    
     # df = pd.DataFrame(adata.X)
     # df = df.loc[:, df.nunique() > 1]
     #adata = adata[["1","3"]]
-
-    #adata = ad.AnnData(X=expression_data, 
-                        #obs={"Gene": gene_ids}, 
-                        #var={"Cell ID": cell_ids, "Cell Type": cell_types})
    
     #adata = adata.obs["Gene"]
     adata = ad.AnnData(X=adata.X.T, obs=adata.var, var=adata.obs)
+    print(adata)
     
-    sc.pp.pca(adata, n_comps=3)
-    sc.pp.neighbors(adata, n_neighbors = 75)
-    sc.tl.umap(adata, min_dist=0.8)
-    sc.pl.umap(adata, color=["Cell ID", "1", "2", "3", "4"])
+    sc.pp.pca(adata)
+    sc.pp.neighbors(adata, n_neighbors = 100)
+    sc.tl.umap(adata, min_dist=0.1)
+    sc.pl.umap(adata, color=["Cell Type"], vmin=0, vmax=7)
 
 def run(interaction_pairs, number_bins=2, number_sc=300, diff=False, bMat=None, 
         hill_coeff=1.0, interaction_strength=1.0):
