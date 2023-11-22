@@ -15,6 +15,20 @@ def write_file(path, contents):
     with open(path, "wt") as f:
         f.write(contents)
 
+# create dict with structure {interaction_type: (src_gene, dest_gene)}
+def to_dict(interaction_pairs):
+    d = dict()
+    for line in interaction_pairs.splitlines():
+        items = line.split(",")
+        src = items[0]
+        dest = items[1]
+        interaction_type = items[2]
+        if interaction_type not in d:
+            d[interaction_type] = []
+        d[interaction_type].append((src, dest))
+    d["no-ligand"] = [] # create key for dummy regs
+    return d
+
 def input_file_targets_format(targets):
     input_file_targets = str()
     for dest in targets:
@@ -48,22 +62,22 @@ def find_master_regulators(interaction_pairs):
     master_regulators["no-ligand"] = dict()
     num_master_regs = 0
 
-    for line in interaction_pairs.splitlines():
-        items = line.split(",")
-        src = items[0]
-        dest = items[1]
-        interaction_type = items[2]
+    for (src, dest) in interaction_pairs["receptor-TF"]:
+        if (src + "_", dest) not in interaction_pairs["no-ligand"]:
+            interaction_pairs["no-ligand"].append((src + "_", dest))
+         
+        if src not in master_regulators["receptor-TF"]:
+            corr = src + "_" # name of corresponding dummy reg
+            master_regulators["receptor-TF"][src] = [corr]
+            master_regulators["no-ligand"][corr] = [src]
+            num_master_regs += 2
 
-        if interaction_type == "receptor-TF" or interaction_type == "no-ligand":
-            if interaction_type == "receptor-TF":
-                corr = src + "_"
-            else: corr = src[:-1]
-            if src not in master_regulators[interaction_type]:
-                num_master_regs += 1
-            master_regulators[interaction_type][src] = [corr]
-            if dest in master_regulators[interaction_type]:
-                master_regulators.pop(dest)
-                num_master_regs -= 1
+        if dest in master_regulators["receptor-TF"]:
+            corr = dest + "_" # name of corresponding dummy reg
+            master_regulators["receptor-TF"].pop(dest)
+            master_regulators["no-ligand"].pop(corr)
+            num_master_regs -= 2
+    
     return master_regulators, num_master_regs
     
 def generate_basal_prod_rates(master_regulators, number_bins, target_ids):
@@ -76,13 +90,13 @@ def generate_basal_prod_rates(master_regulators, number_bins, target_ids):
                 if (i == target_ids[reg]):
                     #basal_prod = np.round(np.random.uniform(0, 1), 2)
                     basal_prod = 1.0
-                else: basal_prod = 0.01
+                else: basal_prod = 0.0001
                 master_regulators["receptor-TF"][reg].append(basal_prod)
-                master_regulators["no-ligand"][dummy_reg].append(0.01)
+                master_regulators["no-ligand"][dummy_reg].append(0.0001)
             else:
                 index = 1 + (i - number_bins//2) # corresponding cell for reg
-                basal_prod = np.round((master_regulators["receptor-TF"][reg][index]), 2)
-                master_regulators["receptor-TF"][reg].append(0.01)
+                basal_prod = np.round((master_regulators["receptor-TF"][reg][index]), 4)
+                master_regulators["receptor-TF"][reg].append(0.0001)
                 master_regulators["no-ligand"][dummy_reg].append(basal_prod)
 
 # Choose enumerations for regulators and targets
@@ -90,63 +104,56 @@ def choose_target_ids(interaction_pairs, master_regulators, num_master_regs):
     target_id = num_master_regs
     master_id = 0
     target_ids = dict()
-    for line in interaction_pairs.splitlines():
-        items = line.split(",")
-        src = items[0]
-        dest = items[1] 
-        interaction_type = items[2]
+    for interaction_type in interaction_pairs:
+        for (src, dest) in interaction_pairs[interaction_type]:
+            is_master_regulator = (src in master_regulators["receptor-TF"] or src in master_regulators["no-ligand"])
+            if (src not in target_ids and is_master_regulator):
+                target_ids[src] = master_id
+                master_id += 1
+            if src not in target_ids:
+                target_ids[src] = target_id
+                target_id += 1
+            if dest not in target_ids:
+                target_ids[dest] = target_id
+                target_id += 1
 
-        if (src not in target_ids and (src in master_regulators["receptor-TF"] 
-            or src in master_regulators["no-ligand"])):
-            target_ids[src] = master_id
-            master_id += 1
-        if src not in target_ids:
-            target_ids[src] = target_id
-            target_id += 1
-        if dest not in target_ids:
-            target_ids[dest] = target_id
-            target_id += 1
     return target_ids
 
 # Build dictionary with information about targets
 def build_input_file_targets(interaction_pairs, target_ids, hill_coeff, interaction_strength):
     targets = dict()
     genes = set()
-    for line in interaction_pairs.splitlines():
-        items = line.split(",")
-        src = items[0]
-        dest = items[1]
-        interaction_type = items[2]
-        if (interaction_type == "TF-target_gene"): 
-            continue
+    for interaction_type in interaction_pairs:
+        for (src, dest) in interaction_pairs[interaction_type]:
+            if (interaction_type == "TF-target_gene"): continue
 
-        genes.add(dest)
-        if (interaction_type == "no_ligand"): 
-            interaction_strength = 0
-        else: 
-            interaction_strength = np.round(np.random.uniform(0, 1), 2)
-        
-        if dest in targets:
-            targets[dest]["reg_count"] += 1.0
-            targets[dest]["reg_ids"].append(target_ids[src])
-            targets[dest]["interaction_strengths"].append(interaction_strength)
-            targets[dest]["hill_coeffs"].append(hill_coeff)
-        else:
-            targets[dest] = dict()
-            targets[dest]["target_id"] = target_ids[dest]
-            targets[dest]["reg_count"] = 1.0
-            targets[dest]["reg_ids"] = [target_ids[src]]
-            targets[dest]["interaction_strengths"] = [interaction_strength]
-            targets[dest]["hill_coeffs"] = [hill_coeff]
+            genes.add(dest)
+            interaction_strength = 1.0
+            #interaction_strength = np.round(np.random.uniform(0, 1), 2)
+            
+            if dest in targets:
+                targets[dest]["reg_count"] += 1.0
+                targets[dest]["reg_ids"].append(target_ids[src])
+                targets[dest]["interaction_strengths"].append(interaction_strength)
+                targets[dest]["hill_coeffs"].append(hill_coeff)
+            else:
+                targets[dest] = dict()
+                targets[dest]["target_id"] = target_ids[dest]
+                targets[dest]["reg_count"] = 1.0
+                targets[dest]["reg_ids"] = [target_ids[src]]
+                targets[dest]["interaction_strengths"] = [interaction_strength]
+                targets[dest]["hill_coeffs"] = [hill_coeff]
     return targets, len(genes)
 
 def input_file_format(path, number_bins, hill_coeff, interaction_strength):
     interaction_pairs = read_file(path)
+    interaction_pairs = to_dict(interaction_pairs)
 
     # Identify master regulators from gene regulatory network
     master_regulators, num_master_regs = find_master_regulators(interaction_pairs)
     # Choose enumerations for regulators and targets
     target_ids = choose_target_ids(interaction_pairs, master_regulators, num_master_regs)
+    print(target_ids)
     # Generate basal production rates in each cell
     generate_basal_prod_rates(master_regulators, number_bins, target_ids)
     # Build dictionary with information about targets
@@ -178,7 +185,7 @@ def steady_state_clean_data(number_genes, number_bins, number_sc):
     expr_clean = np.concatenate(expr, axis = 1)
     return sim, expr, expr_clean
 
-def steady_state_technical_noise(sim, expr, num_master_regs):
+def steady_state_technical_noise(sim, expr, number_genes, num_master_regs):
     # Add outlier genes
     expr_O = sim.outlier_effect(expr, outlier_prob = 0.01, mean = 0.8, scale = 1)
     # Add Library Size Effect
@@ -192,9 +199,10 @@ def steady_state_technical_noise(sim, expr, num_master_regs):
     count_matrix = np.concatenate(count_matrix, axis = 1)
     # add bottom half to top half
 
-    # for i in range(num_master_regs//2):
-    #     count_matrix[i] += count_matrix[4]
-    #     count_matrix = np.delete(count_matrix, 4, axis=0)
+    dummy_i = num_master_regs//2
+    for i in range(num_master_regs//2):
+        count_matrix[i] += count_matrix[dummy_i]
+        count_matrix = np.delete(count_matrix, dummy_i, axis=0)
     return count_matrix
 
 ##############################################
@@ -226,21 +234,15 @@ def run_umap(path):
     # show every cell type
     # reg and dummy_reg should light up compared to others
     
-    # for gene in range(4): # master regulators
-    # adata = adata[["0","1", "2", "3"]]
+    #adata = adata[["0","1", "2", "3"]]
     
-    # df = pd.DataFrame(adata.X)
-    # df = df.loc[:, df.nunique() > 1]
-    #adata = adata[["1","3"]]
-   
-    #adata = adata.obs["Gene"]
     adata = ad.AnnData(X=adata.X.T, obs=adata.var, var=adata.obs)
     print(adata)
     
     sc.pp.pca(adata)
     sc.pp.neighbors(adata, n_neighbors = 100)
     sc.tl.umap(adata, min_dist=0.1)
-    sc.pl.umap(adata, color=["Cell Type"], vmin=0, vmax=7)
+    sc.pl.umap(adata, color=["Cell Type"])
 
 def run(interaction_pairs, number_bins=2, number_sc=300, diff=False, bMat=None, 
         hill_coeff=1.0, interaction_strength=1.0):
@@ -261,5 +263,5 @@ def run(interaction_pairs, number_bins=2, number_sc=300, diff=False, bMat=None,
     else: 
         sim, expr, expr_clean = steady_state_clean_data(number_genes, number_bins,
                                                         number_sc)
-        count_matrix = steady_state_technical_noise(sim, expr, num_master_regs)
+        count_matrix = steady_state_technical_noise(sim, expr, number_genes, num_master_regs)
         adata = make_h5ad(count_matrix, ad_path, number_sc)
