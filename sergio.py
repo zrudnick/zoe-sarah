@@ -144,7 +144,6 @@ class sergio (object):
         # the object.
         """
 
-        print("Number of genes = ", self.nGenes_)
         for i in range(self.nGenes_):
             self.graph_[i] = {}
             self.graph_[i]['targets'] = []
@@ -417,7 +416,7 @@ class sergio (object):
         self.init_gene_bin_conc_(level)
         nReqSteps = self.calculate_required_steps_(level)
         sim_set = np.copy(self.level2verts_[level]).tolist()
-        print ("There are " + str(len(sim_set)) +" genes to simulate in this layer")
+        # print ("There are " + str(len(sim_set)) +" genes to simulate in this layer")
 
         while sim_set != []:
             nRemainingG = len(sim_set)
@@ -523,9 +522,9 @@ class sergio (object):
 
     def simulate(self):
         for level in range(self.maxLevels_, -1, -1):
-            print ("Start simulating new level")
+            #print ("Start simulating new level")
             self.CLE_simulator_(level)
-            print ("Done with current level")
+            #print ("Done with current level")
 
     def getExpressions(self):
         ret = np.zeros((self.nBins_, self.nGenes_, self.nSC_))

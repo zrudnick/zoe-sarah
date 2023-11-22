@@ -15,7 +15,7 @@ def write_file(path, contents):
     with open(path, "wt") as f:
         f.write(contents)
 
-# create dict with structure {interaction_type: (src_gene, dest_gene)}
+# Create dict with form {interaction_type: (src_gene, dest_gene)}
 def to_dict(interaction_pairs):
     d = dict()
     for line in interaction_pairs.splitlines():
@@ -44,69 +44,69 @@ def input_file_targets_format(targets):
         input_file_targets += "\n"
     write_file("input_file_targets", input_file_targets[:-1])
 
-def input_file_regs_format(master_regulators, target_ids):
+def input_file_regs_format(master_regs, target_ids):
     input_file_regs = str()
-    for interaction_type in master_regulators:
-        for reg in master_regulators[interaction_type]:
+    for interaction_type in master_regs:
+        for reg in master_regs[interaction_type]:
             input_file_regs += str(target_ids[reg]) + ","
-            for basal_int in master_regulators[interaction_type][reg][1:]:
+            for basal_int in master_regs[interaction_type][reg][1:]:
                 input_file_regs += str(basal_int) + ","
             input_file_regs = input_file_regs[:-1]
             input_file_regs += "\n"
     write_file("input_file_regs", input_file_regs[:-1])
 
-# Identify master regulators from gene regulatory network
-def find_master_regulators(interaction_pairs):
-    master_regulators = dict()
-    master_regulators["receptor-TF"] = dict()
-    master_regulators["no-ligand"] = dict()
-    num_master_regs = 0
+# Identify master regs from gene regulatory network
+def find_master_regs(interaction_pairs):
+    master_regs = dict()
+    master_regs["receptor-TF"] = dict()
+    master_regs["no-ligand"] = dict()
+    n_master_regs = 0
 
     for (src, dest) in interaction_pairs["receptor-TF"]:
         if (src + "_", dest) not in interaction_pairs["no-ligand"]:
             interaction_pairs["no-ligand"].append((src + "_", dest))
          
-        if src not in master_regulators["receptor-TF"]:
+        if src not in master_regs["receptor-TF"]:
             corr = src + "_" # name of corresponding dummy reg
-            master_regulators["receptor-TF"][src] = [corr]
-            master_regulators["no-ligand"][corr] = [src]
-            num_master_regs += 2
+            master_regs["receptor-TF"][src] = [corr]
+            master_regs["no-ligand"][corr] = [src]
+            n_master_regs += 2
 
-        if dest in master_regulators["receptor-TF"]:
+        if dest in master_regs["receptor-TF"]:
             corr = dest + "_" # name of corresponding dummy reg
-            master_regulators["receptor-TF"].pop(dest)
-            master_regulators["no-ligand"].pop(corr)
-            num_master_regs -= 2
+            master_regs["receptor-TF"].pop(dest)
+            master_regs["no-ligand"].pop(corr)
+            n_master_regs -= 2
     
-    return master_regulators, num_master_regs
+    return master_regs, n_master_regs
     
-def generate_basal_prod_rates(master_regulators, number_bins, target_ids):
+def generate_basal_prod_rates(master_regs, n_bins, target_ids):
     # Generate random basal production rates for each cell
-    for reg in master_regulators["receptor-TF"]:
-        dummy_reg = master_regulators["receptor-TF"][reg][0]
-        for i in range(number_bins):
-            if (i < number_bins//2):
+    for reg in master_regs["receptor-TF"]:
+        dummy_reg = master_regs["receptor-TF"][reg][0]
+        for i in range(n_bins):
+            if (i < n_bins//2):
                 # one for each cell type
                 if (i == target_ids[reg]):
                     #basal_prod = np.round(np.random.uniform(0, 1), 2)
                     basal_prod = 1.0
                 else: basal_prod = 0.0001
-                master_regulators["receptor-TF"][reg].append(basal_prod)
-                master_regulators["no-ligand"][dummy_reg].append(0.0001)
+                master_regs["receptor-TF"][reg].append(basal_prod)
+                master_regs["no-ligand"][dummy_reg].append(0.0001)
             else:
-                index = 1 + (i - number_bins//2) # corresponding cell for reg
-                basal_prod = np.round((master_regulators["receptor-TF"][reg][index]), 4)
-                master_regulators["receptor-TF"][reg].append(0.0001)
-                master_regulators["no-ligand"][dummy_reg].append(basal_prod)
+                index = 1 + (i - n_bins//2) # corresponding cell for reg
+                basal_prod = np.round((master_regs["receptor-TF"][reg][index]), 4)
+                master_regs["receptor-TF"][reg].append(0.0001)
+                master_regs["no-ligand"][dummy_reg].append(basal_prod)
 
-# Choose enumerations for regulators and targets
-def choose_target_ids(interaction_pairs, master_regulators, num_master_regs):
-    target_id = num_master_regs
+# Choose enerations for regs and targets
+def choose_target_ids(interaction_pairs, master_regs, n_master_regs):
+    target_id = n_master_regs
     master_id = 0
     target_ids = dict()
     for interaction_type in interaction_pairs:
         for (src, dest) in interaction_pairs[interaction_type]:
-            is_master_regulator = (src in master_regulators["receptor-TF"] or src in master_regulators["no-ligand"])
+            is_master_regulator = (src in master_regs["receptor-TF"] or src in master_regs["no-ligand"])
             if (src not in target_ids and is_master_regulator):
                 target_ids[src] = master_id
                 master_id += 1
@@ -125,67 +125,66 @@ def build_input_file_targets(interaction_pairs, target_ids, hill_coeff, interact
     genes = set()
     for interaction_type in interaction_pairs:
         for (src, dest) in interaction_pairs[interaction_type]:
-            if (interaction_type == "TF-target_gene"): continue
+            #if (interaction_type == "TF-target_gene"): continue
 
             genes.add(dest)
-            interaction_strength = 1.0
-            #interaction_strength = np.round(np.random.uniform(0, 1), 2)
             
             if dest in targets:
-                targets[dest]["reg_count"] += 1.0
+                targets[dest]["reg_count"] += 1
                 targets[dest]["reg_ids"].append(target_ids[src])
                 targets[dest]["interaction_strengths"].append(interaction_strength)
                 targets[dest]["hill_coeffs"].append(hill_coeff)
             else:
                 targets[dest] = dict()
                 targets[dest]["target_id"] = target_ids[dest]
-                targets[dest]["reg_count"] = 1.0
+                targets[dest]["reg_count"] = 1
                 targets[dest]["reg_ids"] = [target_ids[src]]
                 targets[dest]["interaction_strengths"] = [interaction_strength]
                 targets[dest]["hill_coeffs"] = [hill_coeff]
-    return targets, len(genes)
+    return targets, genes
 
-def input_file_format(path, number_bins, hill_coeff, interaction_strength):
+# Create input_file_targets and input_file_regs files
+def input_file_format(path, hill_coeff, interaction_strength):
     interaction_pairs = read_file(path)
+    # Convert csv to dictionary in form {interaction_type: (src_gene, dest_gene)}
     interaction_pairs = to_dict(interaction_pairs)
-
-    # Identify master regulators from gene regulatory network
-    master_regulators, num_master_regs = find_master_regulators(interaction_pairs)
-    # Choose enumerations for regulators and targets
-    target_ids = choose_target_ids(interaction_pairs, master_regulators, num_master_regs)
-    print(target_ids)
+    # Identify master regs from gene regulatory network
+    master_regs, n_master_regs = find_master_regs(interaction_pairs)
+    n_bins = n_master_regs
+    # Choose enerations for regs and targets
+    target_ids = choose_target_ids(interaction_pairs, master_regs, n_master_regs)
     # Generate basal production rates in each cell
-    generate_basal_prod_rates(master_regulators, number_bins, target_ids)
+    generate_basal_prod_rates(master_regs, n_bins, target_ids)
     # Build dictionary with information about targets
-    targets, num_genes = build_input_file_targets(interaction_pairs, target_ids, hill_coeff, interaction_strength)
+    targets, genes = build_input_file_targets(interaction_pairs, target_ids, hill_coeff, interaction_strength)
     # Format and write the input files
     input_file_targets = input_file_targets_format(targets)
-    input_file_regs = input_file_regs_format(master_regulators, target_ids)
+    input_file_regs = input_file_regs_format(master_regs, target_ids)
 
-    total_genes = num_master_regs + num_genes
-    return total_genes, num_master_regs
+    n_genes = n_master_regs + len(genes)
+    return n_genes, n_master_regs, n_bins
 
 ##############################################
 # SERGIO Functions
 ##############################################
 
 
-def steady_state_clean_data(number_genes, number_bins, number_sc):
-    sim = sergio(number_genes=number_genes, number_bins = number_bins, number_sc = number_sc, 
+def steady_state_clean_data(n_genes, n_bins, n_sc):
+    sim = sergio(number_genes=n_genes, number_bins = n_bins, number_sc = n_sc, 
                  noise_params = 1, decays=0.8, sampling_state=15, 
                  noise_type='dpd')
-    print('\nBuilding graph...\n')
+    print('Building graph...')
     sim.build_graph(input_file_taregts ='input_file_targets', 
                     input_file_regs='input_file_regs', 
                     shared_coop_state=2)
-    print('\nSimulating...\n')
+    print('Simulating...')
     sim.simulate()
-    print('\nSimulation complete! Adding technical noise...\n')
+    print('Simulation complete! Adding technical noise...')
     expr = sim.getExpressions()
-    expr_clean = np.concatenate(expr, axis = 1)
-    return sim, expr, expr_clean
+    
+    return sim, expr
 
-def steady_state_technical_noise(sim, expr, number_genes, num_master_regs):
+def steady_state_technical_noise(sim, expr, n_genes, n_master_regs):
     # Add outlier genes
     expr_O = sim.outlier_effect(expr, outlier_prob = 0.01, mean = 0.8, scale = 1)
     # Add Library Size Effect
@@ -194,16 +193,11 @@ def steady_state_technical_noise(sim, expr, number_genes, num_master_regs):
     binary_ind = sim.dropout_indicator(expr_O_L, shape = 6.5, percentile = 82)
     expr_O_L_D = np.multiply(binary_ind, expr_O_L)
     # Convert to UMI count
-    count_matrix = sim.convert_to_UMIcounts(expr_O_L_D)
+    gene_expr = sim.convert_to_UMIcounts(expr_O_L_D)
     # Make a 2d gene expression matrix
-    count_matrix = np.concatenate(count_matrix, axis = 1)
-    # add bottom half to top half
+    gene_expr = np.concatenate(gene_expr, axis = 1)
 
-    dummy_i = num_master_regs//2
-    for i in range(num_master_regs//2):
-        count_matrix[i] += count_matrix[dummy_i]
-        count_matrix = np.delete(count_matrix, dummy_i, axis=0)
-    return count_matrix
+    return gene_expr
 
 ##############################################
 # h5ad Read and Write
@@ -213,55 +207,48 @@ def open_h5ad(path):
     adata = ad.read_h5ad(path)
     return adata
 
-def make_h5ad(expression_data, ad_path, number_sc):
-    gene_ids = [i for i in range(len(expression_data))]
-    cell_ids = [j for j in range(len(expression_data[0]))]
-    cell_types = [(cell_id // number_sc) for cell_id in cell_ids]
-    adata = ad.AnnData(X=expression_data, 
+def make_h5ad(gene_expr, ad_path, n_sc):
+    gene_ids = [i for i in range(len(gene_expr))]
+    cell_ids = [j for j in range(len(gene_expr[0]))]
+    cell_types = [(cell_id // n_sc) for cell_id in cell_ids]
+    adata = ad.AnnData(X=gene_expr, 
                         obs={'Gene': gene_ids}, 
                         var={'Cell Type': cell_types})
     adata.write_h5ad(ad_path)
     return adata
     
+def add_dummy_nodes(gene_expr, n_master_regs):
+    dummy_i = n_master_regs//2
+    for i in range(n_master_regs//2):
+        gene_expr[i] += gene_expr[dummy_i]
+        gene_expr = np.delete(gene_expr, dummy_i, axis=0)
 
 ##############################################
 # main
 ##############################################
 
-def run_umap(path):
+def run_umap(path, n_neighbors=100, min_dist=0.1):
+    print("--------------------------------------")
+    print("         Creating UMAP graph          ")
+    print("--------------------------------------")
+
     adata = open_h5ad(path)
-    # one graph per gene
-    # show every cell type
-    # reg and dummy_reg should light up compared to others
-    
-    #adata = adata[["0","1", "2", "3"]]
-    
     adata = ad.AnnData(X=adata.X.T, obs=adata.var, var=adata.obs)
-    print(adata)
-    
+    print(f"Gene Expression Matrix: {adata.X.shape[0]} Single Cells, {adata.X.shape[1]} Genes")
+
     sc.pp.pca(adata)
-    sc.pp.neighbors(adata, n_neighbors = 100)
-    sc.tl.umap(adata, min_dist=0.1)
+    sc.pp.neighbors(adata, n_neighbors=n_neighbors)
+    sc.tl.umap(adata, min_dist=min_dist)
     sc.pl.umap(adata, color=["Cell Type"])
 
-def run(interaction_pairs, number_bins=2, number_sc=300, diff=False, bMat=None, 
-        hill_coeff=1.0, interaction_strength=1.0):
-              
-    number_genes, num_master_regs = input_file_format(interaction_pairs, number_bins, 
-                                                      hill_coeff, interaction_strength)
-
-    if (bMat == None): 
-        if (number_bins == 1): bMat = 'bMat/1_cell_type.tab'
-        elif (number_bins == 2): bMat = 'bMat/2_cell_types.tab'
-        elif (number_bins == 3): bMat = 'bMat/3_cell_types.tab'
-        elif (number_bins == 4): bMat = 'bMat/4_cell_types.tab'
+def run(interaction_pairs, n_sc=300, hill_coeff=1.0, interaction_strength=1.0):
+    n_genes, n_master_regs, n_bins = input_file_format(interaction_pairs, hill_coeff, interaction_strength)
     ad_path = "gene_expression.h5ad"
-    
 
-    if (diff): 
-        differentiation_clean_data(number_genes, number_bins, bMat)
-    else: 
-        sim, expr, expr_clean = steady_state_clean_data(number_genes, number_bins,
-                                                        number_sc)
-        count_matrix = steady_state_technical_noise(sim, expr, number_genes, num_master_regs)
-        adata = make_h5ad(count_matrix, ad_path, number_sc)
+    print("--------------------------------------")
+    print("            Running SERGIO            ")
+    print("--------------------------------------")
+    sim, expr = steady_state_clean_data(n_genes, n_bins, n_sc)
+    gene_expr = steady_state_technical_noise(sim, expr, n_genes, n_master_regs)
+    add_dummy_nodes(gene_expr, n_master_regs)
+    adata = make_h5ad(gene_expr, ad_path, n_sc)
