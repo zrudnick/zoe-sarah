@@ -62,10 +62,9 @@ def find_master_regs(interaction_pairs):
     master_regs["no-ligand"] = dict()
     n_master_regs = 0
 
+    # Loop through every master regulator-TF pair
     for (src, dest) in interaction_pairs["receptor-TF"]:
-        if (src + "_", dest) not in interaction_pairs["no-ligand"]:
-            interaction_pairs["no-ligand"].append((src + "_", dest))
-         
+       
         if src not in master_regs["receptor-TF"]:
             corr = src + "_" # name of corresponding dummy reg
             master_regs["receptor-TF"][src] = [corr]
@@ -77,9 +76,19 @@ def find_master_regs(interaction_pairs):
             master_regs["receptor-TF"].pop(dest)
             master_regs["no-ligand"].pop(corr)
             n_master_regs -= 2
-    
     return master_regs, n_master_regs
     
+def add_dummy_nodes(interaction_pairs, master_regs):
+    count = 0
+    for master_reg in master_regs["receptor-TF"]:
+        # Add dummy node to interaction_pairs
+        dummy_reg = master_reg + "_"
+        null_dest = "null"+str(count)
+        if (dummy_reg, null_dest) not in interaction_pairs["no-ligand"]:
+            interaction_pairs["no-ligand"].append((dummy_reg, null_dest)) # point to null
+        count += 1
+    return interaction_pairs
+
 def generate_basal_prod_rates(master_regs, n_bins, target_ids):
     # Generate random basal production rates for each cell
     for reg in master_regs["receptor-TF"]:
@@ -105,18 +114,21 @@ def choose_target_ids(interaction_pairs, master_regs, n_master_regs):
     master_id = 0
     target_ids = dict()
     for interaction_type in interaction_pairs:
+        # Error if this loops through TF-target_gene but doesn't add to dict
+        if interaction_type == "TF-target_gene": continue
+
         for (src, dest) in interaction_pairs[interaction_type]:
             is_master_regulator = (src in master_regs["receptor-TF"] or src in master_regs["no-ligand"])
             if (src not in target_ids and is_master_regulator):
                 target_ids[src] = master_id
                 master_id += 1
+            
             if src not in target_ids:
                 target_ids[src] = target_id
                 target_id += 1
             if dest not in target_ids:
                 target_ids[dest] = target_id
                 target_id += 1
-
     return target_ids
 
 # Build dictionary with information about targets
@@ -125,10 +137,11 @@ def build_input_file_targets(interaction_pairs, target_ids, hill_coeff, interact
     genes = set()
     for interaction_type in interaction_pairs:
         for (src, dest) in interaction_pairs[interaction_type]:
-            #if (interaction_type == "TF-target_gene"): continue
+            if (interaction_type == "TF-target_gene"): continue
 
             genes.add(dest)
             
+            if interaction_type == 'no_ligand': interaction_strength = 5.0
             if dest in targets:
                 targets[dest]["reg_count"] += 1
                 targets[dest]["reg_ids"].append(target_ids[src])
@@ -150,6 +163,7 @@ def input_file_format(path, hill_coeff, interaction_strength):
     interaction_pairs = to_dict(interaction_pairs)
     # Identify master regs from gene regulatory network
     master_regs, n_master_regs = find_master_regs(interaction_pairs)
+    interaction_pairs = add_dummy_nodes(interaction_pairs, master_regs)
     n_bins = n_master_regs
     # Choose enerations for regs and targets
     target_ids = choose_target_ids(interaction_pairs, master_regs, n_master_regs)
@@ -217,7 +231,7 @@ def make_h5ad(gene_expr, ad_path, n_sc):
     adata.write_h5ad(ad_path)
     return adata
     
-def add_dummy_nodes(gene_expr, n_master_regs):
+def add_dummy_counts(gene_expr, n_master_regs):
     dummy_i = n_master_regs//2
     for i in range(n_master_regs//2):
         gene_expr[i] += gene_expr[dummy_i]
@@ -227,7 +241,7 @@ def add_dummy_nodes(gene_expr, n_master_regs):
 # main
 ##############################################
 
-def run_umap(path, n_neighbors=100, min_dist=0.1):
+def run_umap(path, n_neighbors=50, min_dist=0.01):
     print("--------------------------------------")
     print("         Creating UMAP graph          ")
     print("--------------------------------------")
@@ -239,7 +253,7 @@ def run_umap(path, n_neighbors=100, min_dist=0.1):
     sc.pp.pca(adata)
     sc.pp.neighbors(adata, n_neighbors=n_neighbors)
     sc.tl.umap(adata, min_dist=min_dist)
-    sc.pl.umap(adata, color=["Cell Type"])
+    sc.pl.umap(adata, color=["Cell Type", "0", "1", "2", "3", "4", "5", "6", "7"])
 
 def run(interaction_pairs, n_sc=300, hill_coeff=1.0, interaction_strength=1.0):
     n_genes, n_master_regs, n_bins = input_file_format(interaction_pairs, hill_coeff, interaction_strength)
@@ -250,5 +264,5 @@ def run(interaction_pairs, n_sc=300, hill_coeff=1.0, interaction_strength=1.0):
     print("--------------------------------------")
     sim, expr = steady_state_clean_data(n_genes, n_bins, n_sc)
     gene_expr = steady_state_technical_noise(sim, expr, n_genes, n_master_regs)
-    add_dummy_nodes(gene_expr, n_master_regs)
+    #add_dummy_counts(gene_expr, n_master_regs)
     adata = make_h5ad(gene_expr, ad_path, n_sc)
