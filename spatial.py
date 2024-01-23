@@ -288,9 +288,33 @@ def add_dummy_counts(gene_expr, n_master_regs):
 ##############################################
 # Spatial modeling functions
 ##############################################
+        
+# Determine random coordinates for each spot
+def get_spatial_coordinates(n_spots):
+    sqr_n_spots = int(n_spots**0.5)
+    spatial_coordinates = []
+    i_j = set()
+    for i in range(sqr_n_spots):
+        for j in range(sqr_n_spots):
+            i_j.add((i, j))
+    print(i_j)
+    n_spots_new = 0
+    while len(i_j) > 0:
+        n_spots_new += 1
+        (i_curr, j_curr) = list(i_j)[np.random.choice(len(i_j))]
+        i_j.remove((i_curr, j_curr))
+        spatial_coordinates.append((i_curr, j_curr))
+    (i_curr, j_curr) = sqr_n_spots, 0
+    while n_spots_new < n_spots:
+        spatial_coordinates.append((i_curr, j_curr))
+        (i_curr, j_curr) = (i_curr, j_curr + 1)
+        n_spots_new += 1
+        if j_curr == sqr_n_spots:
+            (i_curr, j_curr) = (i_curr + 1, 0)
+    return spatial_coordinates
 
 # Generate an empty square spot graph to emulate Visium data
-def generate_empty_spatial_image():
+def generate_empty_spatial_image(n_bins, n_sc, sc_data):
     # Load Visium spatial image
     # st_data = sc.read_visium('c:/Users/zoeru/Downloads/STB01S1_preproccesed/STB01S1_preproccesed/outs')
     # st_data.var_names_make_unique()
@@ -298,7 +322,9 @@ def generate_empty_spatial_image():
 
     # define dimensions of the empty Visium spatial image
     n_genes = 2000
-    n_spots = 5000
+    n_spots = n_bins * n_sc # should be n_sc * n_bins
+
+    spatial_coordinates = get_spatial_coordinates(n_spots)
 
     # Create a blank AnnData object
     adata = sc.AnnData(
@@ -306,10 +332,7 @@ def generate_empty_spatial_image():
         obs=pd.DataFrame(index=np.arange(n_spots)),  # Observation metadata
         var=pd.DataFrame(index=np.arange(n_genes))  # Variable (gene) metadata
     )
-
-    # Add Visium-specific information to AnnData object
-    # this contains repeats
-    adata.obsm['spatial'] = np.random.random_integers(0, n_genes, (n_spots, 2))  # Spatial coordinates
+    adata.obsm['spatial'] = np.asarray(spatial_coordinates) # Spatial coordinates
 
     # Additional metadata, if needed
     adata.obs['in_tissue'] = [0] * n_spots
@@ -370,7 +393,9 @@ def set_temperature(st_data, gp_samples, n_bins, n_sc):
     # try T 1-5 for now
     for T in [1, 5]:
         # the cell type proportion at every spot is an 'energy' Phi
-        phi_cell = pd.DataFrame(gp_samples, columns=range(int((n_bins * n_sc) * 0.01)), index=st_data.obs.index)
+        columns = range(int((n_bins * n_sc) * 0.01))
+        index = st_data.obs.index
+        phi_cell = pd.DataFrame(gp_samples, columns=columns, index=index)
         # each phi_cell is a cell-type energy vector aligned with spots
         # the proportion Pi_c_s for each spot and each cell type is then calculated using the energy
         pi_cell = (cell_abundance * np.exp(phi_cell/T)).div((cell_abundance * np.exp(phi_cell/T)).sum(1),axis='index')
@@ -381,7 +406,7 @@ def set_temperature(st_data, gp_samples, n_bins, n_sc):
             st_data.obs[str(cell_type) + '_' + str(T)] = pi_cell[cell_type]
     return st_data
 
-def load_sc_data(path, st_data, K):
+def load_sc_data(path):
     # Load SC data
     sc_data = open_h5ad(path)
     # Retrieve cell type information?
@@ -426,6 +451,23 @@ def sample_celltype(cell_groups, celltype_index, n):
 
         n = len(type_tags)
     
+    '''
+    n = 3 
+    type_tags = ['AAGCCGCCATGTTCCC-1', 'CGTCAGGCACTGTGTA-1', 'CTCATTATCGTTTAGG-1'] 
+    [ct] * n = ['AT2', 'AT2', 'AT2'] 
+    type_sum =  MIR1302-2HG    0.0
+                FAM138A        0.0
+                OR4F5          0.0
+                AL627309.1     0.0
+                AL627309.3     0.0
+                            ... 
+                AC141272.1     0.0
+                AC023491.2     0.0
+                AC007325.1     0.0
+                AC007325.4     0.0
+                AC007325.2     0.0
+    Length: 36601, dtype: float32
+    '''
     return n, type_tags, [ct]*n, type_sum
 
 def synthesize_data(cell_groups, st_data, sc_data, xy):
@@ -528,9 +570,11 @@ def spatial_plots(st_data):
     sc.pl.embedding(st_data, 'spatial')
 
     # Show embedded spots with color determined by pi value
+    # Temperature = 1
     sc.pl.embedding(st_data, 'spatial', color=[x for x in st_data.obsm['pi_cell1'].columns], cmap='RdBu_r',show=False)
     plt.suptitle("$T=1$")
     plt.show()
+    # Temperature = 5
     sc.pl.embedding(st_data, 'spatial', color=[x+'_5' for x in st_data.obsm['pi_cell5'].columns], cmap='RdBu_r',show=False)
     plt.suptitle("$T=5$")
     plt.show()
@@ -541,13 +585,15 @@ def plot_spatial_correlated_distribution(st_data):
 
 # Simulate spatial expression data with Guassian process   
 def simulate_spatial_expression_data(path, n_bins, n_sc):
+    # Load single cell gene expression data
+    sc_data = load_sc_data(path)
+
     # Determine underlying spatial grid
-    st_data = generate_empty_spatial_image()
+    st_data = generate_empty_spatial_image(n_bins, n_sc, sc_data)
     K, xy = distance_matrix(st_data)
     plot_st_data(st_data)
     
-    # Load and process single cell gene expression data
-    sc_data = load_sc_data(path, st_data, K)
+    # Process single cell gene expression data
     gp_samples = get_gaussian_process_samples(K)
     st_data = set_temperature(st_data, gp_samples, n_bins, n_sc)
     #cell_types = determine_cell_groups(st_data, sc_data)
