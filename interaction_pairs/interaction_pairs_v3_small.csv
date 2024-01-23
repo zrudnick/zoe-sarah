@@ -2,3 +2,7 @@ Kmt2a,Nsd1,receptor-TF
 Nt5e,Pcbd2,receptor-TF
 Axl,Foxo3,receptor-TF
 Cd40,Tnfaip3,receptor-TF
+Nsd1,idk2,TF-target_gene
+Pcbd2,idk3,TF-target_gene
+Foxo3,idk1,TF-target_gene
+Tnfaip3,idk4,TF-target_gene

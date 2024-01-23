@@ -1,11 +1,23 @@
 
 import numpy as np
 import pandas as pd
-import gene
-from sergio import *
 import matplotlib.pyplot as plt
 import anndata as ad
 import scanpy as sc
+import ot
+import ot.plot
+from ot.datasets import make_1D_gauss as gauss
+import os
+from collections import Counter, defaultdict
+from scipy.spatial.distance import pdist, squareform
+from tqdm import tqdm, trange
+
+import gene
+from sergio import *
+
+##############################################
+# SERGIO Inputs from GRN
+##############################################
 
 # Read a file from the input path
 def read_file(path):
@@ -104,7 +116,7 @@ def choose_target_ids(interaction_pairs, master_regs, n_master_regs):
     target_ids = dict()
     for interaction_type in interaction_pairs:
         # Error if this loops through TF-target_gene but doesn't add to dict
-        if interaction_type == "TF-target_gene": continue
+        #if interaction_type == "TF-target_gene": continue
 
         for (src, dest) in interaction_pairs[interaction_type]:
             is_master_regulator = (src in master_regs["receptor-TF"] or src in master_regs["no-ligand"])
@@ -162,7 +174,7 @@ def build_input_file_targets(interaction_pairs, target_ids, hill_coeff, interact
     genes = set()
     for interaction_type in interaction_pairs:
         for (src, dest) in interaction_pairs[interaction_type]:
-            if (interaction_type == "TF-target_gene"): continue
+            #if (interaction_type == "TF-target_gene"): continue
 
             genes.add(dest)
             
@@ -274,8 +286,291 @@ def add_dummy_counts(gene_expr, n_master_regs):
         gene_expr = np.delete(gene_expr, dummy_i, axis=0)
 
 ##############################################
+# Spatial modeling functions
+##############################################
+
+# Generate an empty square spot graph to emulate Visium data
+def generate_empty_spatial_image():
+    # Load Visium spatial image
+    # st_data = sc.read_visium('c:/Users/zoeru/Downloads/STB01S1_preproccesed/STB01S1_preproccesed/outs')
+    # st_data.var_names_make_unique()
+    #print(st_data.uns['spatial'])
+
+    # define dimensions of the empty Visium spatial image
+    n_genes = 2000
+    n_spots = 5000
+
+    # Create a blank AnnData object
+    adata = sc.AnnData(
+        X=np.zeros((n_spots, n_genes)),  # Placeholder for gene expression data
+        obs=pd.DataFrame(index=np.arange(n_spots)),  # Observation metadata
+        var=pd.DataFrame(index=np.arange(n_genes))  # Variable (gene) metadata
+    )
+
+    # Add Visium-specific information to AnnData object
+    # this contains repeats
+    adata.obsm['spatial'] = np.random.random_integers(0, n_genes, (n_spots, 2))  # Spatial coordinates
+
+    # Additional metadata, if needed
+    adata.obs['in_tissue'] = [0] * n_spots
+    adata.obs['array_row'] = [0] * n_spots
+    adata.obs['array_col'] = [0] * n_spots
+    adata.var['gene_ids'] = [0] * n_genes
+    adata.var['feature_types'] = [0] * n_genes
+    adata.var['genome'] = [0] * n_genes
+
+    # Print the AnnData object
+    print(adata)
+    return adata
+
+# Compute distance matrix as Kernel   
+# Describes how similar two spots should be based on distance  
+def distance_matrix(st_data):
+
+    # Compute K, the covariance matrix
+    xy = st_data.obsm['spatial']
+    dist = squareform(pdist(xy))                   # spot pair distances
+    sigma = np.median(dist)                        # median value of spot pair distances
+    lamb = 0.1                                     # similarity to smooth GP, set to 0.1 by default
+    K = np.exp(- dist ** 2 / (lamb * sigma ** 2))
+    return K, xy
+
+# Plot the empty square spot graph
+def plot_st_data(st_data):
+    spatial_coordinates = st_data.obsm['spatial']
+
+    # Visualize spatial distribution
+    plt.figure(figsize=(8, 8))
+    plt.scatter(spatial_coordinates[:, 0], spatial_coordinates[:, 1], s=50, alpha=0.5)
+    plt.title('Spatial Distribution of Visium Spots')
+    plt.xlabel('X Coordinate')
+    plt.ylabel('Y Coordinate')
+    plt.show()
+
+    return
+
+def get_gaussian_process_samples(K):
+    num_spots = K.shape[0] # K is based on the visium data, in this case it is exactly 3127
+    mean = [0]*num_spots
+    cov = K
+    # gp stands for Gaussian Process
+    gp_samples = np.random.multivariate_normal(mean, cov, size=(24,)).T # gp sample for each spot
+    print(len(gp_samples))
+    return gp_samples
+
+# I don't really get this yet
+# Aka how or why to implement it for our sake
+def set_temperature(st_data, gp_samples, n_bins, n_sc):
+    # T is the temperature
+    # A small value of T tends to preserve the dominant cell type with the highest energy
+    # while a large value of T maintains the original cell type proportions
+ 
+    cell_abundance = n_sc / (n_sc * n_bins) # code below expects dataframe?
+   
+    # try T 1-5 for now
+    for T in [1, 5]:
+        # the cell type proportion at every spot is an 'energy' Phi
+        phi_cell = pd.DataFrame(gp_samples, columns=range(int((n_bins * n_sc) * 0.01)), index=st_data.obs.index)
+        # each phi_cell is a cell-type energy vector aligned with spots
+        # the proportion Pi_c_s for each spot and each cell type is then calculated using the energy
+        pi_cell = (cell_abundance * np.exp(phi_cell/T)).div((cell_abundance * np.exp(phi_cell/T)).sum(1),axis='index')
+        st_data.obsm['pi_cell' + str(T)] = pi_cell # add to existing data
+
+        for cell_type, pi in pi_cell.items():
+            print(cell_type)
+            st_data.obs[str(cell_type) + '_' + str(T)] = pi_cell[cell_type]
+    return st_data
+
+def load_sc_data(path, st_data, K):
+    # Load SC data
+    sc_data = open_h5ad(path)
+    # Retrieve cell type information?
+
+    return sc_data
+
+# I'm pretty sure this is all useless too 
+# cuz it deals with real cell types
+def determine_cell_groups(st_data, sc_data):
+    # st_data.obsm['pi_cell'].columns.tolist() at this point contains list of cell types
+    # should just be Cell Type 1, Cell Type 2, Cell Type 3, Cell Type 4
+    # would we also have 5, 6, 7, and 8, for dummy nodes?
+
+    # Queues of each cell type
+    celltype_order = st_data.obsm['pi_cell1'].columns.tolist() # list of cell types
+    print(celltype_order)
+    input()
+    cell_groups = [x for x in sc_data.to_df().groupby(sc_data.obs['cell_type'],sort=False)] 
+    # ('T cell lineage', MIR1302-2HG, FAM138A, ...)
+    # TCTATGCTT..
+    # ACGTGGTTA...
+    # ...
+    print(cell_groups)
+    input()
+    cell_groups.sort(key=lambda x: celltype_order.index(x[0]),)
+    cell_groups = [(ct,cell_group.sample(frac=1)) for   ct, cell_group in cell_groups]
+    print(cell_groups)
+    input()
+    cell_groups_remains = pd.Series([y.shape[0] for x,y in cell_groups],index = [x for x,y in cell_groups])
+    return cell_groups
+
+def sample_celltype(cell_groups, celltype_index, n):
+    ct, type_df = cell_groups[celltype_index]
+    pop_df = type_df.iloc[:n]
+    type_df.drop(pop_df.index, inplace=True)
+    type_tags = pop_df.index.tolist()
+    type_sum = pop_df.sum(0)
+    
+    if len(type_tags) != n:
+        print(f'Warning: {ct} has less than {n} cells')
+        print(f'We only have {len(type_tags)} cells remaining')
+
+        n = len(type_tags)
+    
+    return n, type_tags, [ct]*n, type_sum
+
+def synthesize_data(cell_groups, st_data, sc_data, xy):
+    # Synthesize data spot by spot
+    
+    st_simu_spatialcorr = sc.AnnData(np.zeros((st_data.shape[0],sc_data.shape[1])),obs=pd.DataFrame(index=st_data.obs.index,columns=['cell_counts','cell_tags','cell_types']))
+    # st_simu_spatialcorr_5 = sc.AnnData(np.zeros((st_data.shape[0],sc_data.shape[1])),obs=pd.DataFrame(index=st_data.obs.index,columns=['cell_counts','cell_tags','cell_types']))
+
+    for i in trange(0, 3127):
+        spot_size = np.random.randint(6, 10)
+        prob_inthis_spot = st_data.obsm["pi_cell5"].iloc[i].values
+        mixture = pd.value_counts(np.random.choice(24, spot_size, p=prob_inthis_spot))
+        
+        spot_size_true = 0
+        spot_tags = []
+        spot_types = []
+        spot_X = np.zeros(sc_data.shape[1])
+        
+        # parsing each cell type
+        for ct, n in mixture.items():
+            spot_size_ct, type_tags, type_list, type_sum = sample_celltype(cell_groups, ct, n)
+            
+            spot_size_true += spot_size_ct
+            spot_tags.extend(type_tags)
+            spot_types.extend(type_list)
+            
+            spot_X += type_sum 
+        
+        st_simu_spatialcorr.obs.iloc[i]['cell_counts'] = spot_size_true
+        st_simu_spatialcorr.obs.iloc[i]['cell_tags'] = ','.join(spot_tags)
+        st_simu_spatialcorr.obs.iloc[i]['cell_types'] = ','.join(spot_types)
+        st_simu_spatialcorr.X[i] = spot_X
+
+    st_simu_spatialcorr.obsm['spatial'] = st_data.obsm['spatial']
+    st_simu_spatialcorr.obs['cell_counts'] = st_simu_spatialcorr.obs['cell_counts'].astype(str)
+    st_simu_spatialcorr.var_names = sc_data.var_names
+
+    mapping = st_simu_spatialcorr.obs['cell_tags'].str.split(',',expand=True).stack().reset_index(0)
+    cell2spot_tag = dict(zip(mapping[0],mapping['level_0']))
+
+    spot_tag2xy =dict(zip(st_simu_spatialcorr.obs_names, [f'{x}_{y}' for x,y in xy],))
+    cell2xy = {cell:spot_tag2xy[spot_tag] for cell,spot_tag in cell2spot_tag.items()}
+
+    sc_simu_spatialcorr = sc_data[sc_data.obs_names.isin(cell2xy)]
+    sc_simu_spatialcorr.obs['cell2spot_tag'] = sc_simu_spatialcorr.obs_names.map(cell2spot_tag)
+    sc_simu_spatialcorr.obs['cell2xy'] = sc_simu_spatialcorr.obs_names.map(cell2xy)
+
+    st_simu_spatialcorr.write_h5ad('c:/Users/zoeru/Downloads//simu_data/st_simu_spatialcorr_T=5.h5ad')
+    sc_simu_spatialcorr.write_h5ad('c:/Users/zoeru/Downloads//simu_data/sc_simu_spatialcorr_T=5.h5ad') 
+
+def config_plotting():
+    ## %  config plotting
+    sc.settings._vector_friendly = True
+    # p9.theme_set(p9.theme_classic)
+    plt.rcParams["svg.fonttype"] = "none"
+    plt.rcParams["pdf.fonttype"] = 42
+    plt.rcParams["savefig.transparent"] = True
+    plt.rcParams["figure.figsize"] = (4, 4)
+        
+    plt.rcParams["axes.titlesize"] = 15
+    plt.rcParams["axes.titleweight"] = 500
+    plt.rcParams["axes.titlepad"] = 8.0
+    plt.rcParams["axes.labelsize"] = 14
+    plt.rcParams["axes.labelweight"] = 500
+    plt.rcParams["axes.linewidth"] = 1.2
+    plt.rcParams["axes.labelpad"] = 6.0
+    plt.rcParams["axes.spines.top"] = False
+    plt.rcParams["axes.spines.right"] = False
+
+    plt.rcParams["font.size"] = 11
+    # plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['font.sans-serif'] = ['Helvetica', "Computer Modern Sans Serif", "DejaVU Sans"]
+    plt.rcParams['font.weight'] = 500
+
+    plt.rcParams['xtick.labelsize'] = 12
+    plt.rcParams['xtick.minor.size'] = 1.375
+    plt.rcParams['xtick.major.size'] = 2.75
+    plt.rcParams['xtick.major.pad'] = 2
+    plt.rcParams['xtick.minor.pad'] = 2
+
+    plt.rcParams['ytick.labelsize'] = 12
+    plt.rcParams['ytick.minor.size'] = 1.375
+    plt.rcParams['ytick.major.size'] = 2.75
+    plt.rcParams['ytick.major.pad'] = 2
+    plt.rcParams['ytick.minor.pad'] = 2
+
+    plt.rcParams["legend.fontsize"] = 12
+    plt.rcParams['legend.handlelength'] = 1.4
+    plt.rcParams['legend.numpoints'] = 1
+    plt.rcParams['legend.scatterpoints'] = 3
+
+    plt.rcParams['lines.linewidth'] = 1.7
+    DPI = 300 # dots per inch
+
+def spatial_plots(st_data):
+    # Show underlying image (None)
+    sc.pl.spatial(st_data, alpha=0, img=None, scale_factor=1, spot_size=1)
+
+    # Show embedded spots on top of underlying image
+    sc.pl.embedding(st_data, 'spatial')
+
+    # Show embedded spots with color determined by pi value
+    sc.pl.embedding(st_data, 'spatial', color=[x for x in st_data.obsm['pi_cell1'].columns], cmap='RdBu_r',show=False)
+    plt.suptitle("$T=1$")
+    plt.show()
+    sc.pl.embedding(st_data, 'spatial', color=[x+'_5' for x in st_data.obsm['pi_cell5'].columns], cmap='RdBu_r',show=False)
+    plt.suptitle("$T=5$")
+    plt.show()
+
+def plot_spatial_correlated_distribution(st_data):
+    config_plotting()
+    spatial_plots(st_data)
+
+# Simulate spatial expression data with Guassian process   
+def simulate_spatial_expression_data(path, n_bins, n_sc):
+    # Determine underlying spatial grid
+    st_data = generate_empty_spatial_image()
+    K, xy = distance_matrix(st_data)
+    plot_st_data(st_data)
+    
+    # Load and process single cell gene expression data
+    sc_data = load_sc_data(path, st_data, K)
+    gp_samples = get_gaussian_process_samples(K)
+    st_data = set_temperature(st_data, gp_samples, n_bins, n_sc)
+    #cell_types = determine_cell_groups(st_data, sc_data)
+
+    # Calculate phi and pi values for each spot
+    #synthesize_data(cell_types, st_data, sc_data, xy)
+
+    # Plot the resulting graph
+    plot_spatial_correlated_distribution(st_data)
+
+##############################################
 # main
 ##############################################
+
+
+def run_spatial(path, n_bins, n_sc):
+ 
+    print("--------------------------------------")
+    print("   Determining spatial coordinates    ")
+    print("--------------------------------------")
+
+    simulate_spatial_expression_data(path, n_bins, n_sc)
+    
 
 def run_umap(path, n_neighbors=50, min_dist=0.01):
     print("--------------------------------------")
@@ -289,9 +584,9 @@ def run_umap(path, n_neighbors=50, min_dist=0.01):
     sc.pp.pca(adata)
     sc.pp.neighbors(adata, n_neighbors=n_neighbors)
     sc.tl.umap(adata, min_dist=min_dist)
-    sc.pl.umap(adata, color=["Cell Type", "0", "1", "2", "3", "4", "5", "6", "7"])
+    sc.pl.umap(adata, color=["Cell Type", "16", "17", "18", "19"])
 
-def run(interaction_pairs, n_sc=300, hill_coeff=1.0, interaction_strength=1.0, basal_prod_type=""):
+def run_sergio(interaction_pairs, n_sc=300, hill_coeff=1.0, interaction_strength=1.0, basal_prod_type=""):
     n_genes, n_master_regs, n_bins = input_file_format(interaction_pairs, hill_coeff, interaction_strength, basal_prod_type)
     ad_path = "gene_expression.h5ad"
 
@@ -302,3 +597,5 @@ def run(interaction_pairs, n_sc=300, hill_coeff=1.0, interaction_strength=1.0, b
     gene_expr = steady_state_technical_noise(sim, expr, n_genes, n_master_regs)
     #add_dummy_counts(gene_expr, n_master_regs)
     adata = make_h5ad(gene_expr, ad_path, n_sc)
+
+    return n_genes, n_bins, n_sc
