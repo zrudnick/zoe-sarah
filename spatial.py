@@ -288,6 +288,12 @@ def add_dummy_counts(gene_expr, n_master_regs):
 ##############################################
 # Spatial modeling functions
 ##############################################
+
+# Load gene expression data from SERGIO  
+def load_sc_data(path):
+    # Load SC data
+    sc_data = open_h5ad(path)
+    return sc_data
         
 # Determine random coordinates for each spot
 def get_spatial_coordinates(n_spots):
@@ -344,7 +350,7 @@ def generate_empty_spatial_image(n_bins, n_sc, sc_data):
 
     # Print the AnnData object
     print(adata)
-    return adata
+    return adata, n_spots
 
 # Compute distance matrix as Kernel   
 # Describes how similar two spots should be based on distance  
@@ -372,13 +378,12 @@ def plot_st_data(st_data):
 
     return
 
-def get_gaussian_process_samples(K):
-    num_spots = K.shape[0] # K is based on the visium data, in this case it is exactly 3127
-    mean = [0]*num_spots
+# Use K as the Kernel matrix of a GP to generate samples for each cell type
+def get_gaussian_process_samples(K, n_bins, n_spots):
+    mean = [0]*n_spots
     cov = K
     # gp stands for Gaussian Process
-    gp_samples = np.random.multivariate_normal(mean, cov, size=(24,)).T # gp sample for each spot
-    print(len(gp_samples))
+    gp_samples = np.random.multivariate_normal(mean, cov, size=(n_bins,)).T # gp sample for each spot
     return gp_samples
 
 # I don't really get this yet
@@ -406,13 +411,6 @@ def set_temperature(st_data, gp_samples, n_bins, n_sc):
             st_data.obs[str(cell_type) + '_' + str(T)] = pi_cell[cell_type]
     return st_data
 
-def load_sc_data(path):
-    # Load SC data
-    sc_data = open_h5ad(path)
-    # Retrieve cell type information?
-
-    return sc_data
-
 # I'm pretty sure this is all useless too 
 # cuz it deals with real cell types
 def determine_cell_groups(st_data, sc_data):
@@ -438,85 +436,66 @@ def determine_cell_groups(st_data, sc_data):
     cell_groups_remains = pd.Series([y.shape[0] for x,y in cell_groups],index = [x for x,y in cell_groups])
     return cell_groups
 
-def sample_celltype(cell_groups, celltype_index, n):
-    ct, type_df = cell_groups[celltype_index]
-    pop_df = type_df.iloc[:n]
-    type_df.drop(pop_df.index, inplace=True)
+def sample_celltype(cell_groups, cell_type):
+    pop_df = cell_groups.iloc[:n]
+    cell_groups.drop(pop_df.index, inplace=True)
     type_tags = pop_df.index.tolist()
     type_sum = pop_df.sum(0)
     
-    if len(type_tags) != n:
-        print(f'Warning: {ct} has less than {n} cells')
-        print(f'We only have {len(type_tags)} cells remaining')
-
-        n = len(type_tags)
+    if len(type_tags) == 0:
+        print(f'Warning: {cell_type} has no more cells')
     
-    '''
-    n = 3 
-    type_tags = ['AAGCCGCCATGTTCCC-1', 'CGTCAGGCACTGTGTA-1', 'CTCATTATCGTTTAGG-1'] 
-    [ct] * n = ['AT2', 'AT2', 'AT2'] 
-    type_sum =  MIR1302-2HG    0.0
-                FAM138A        0.0
-                OR4F5          0.0
-                AL627309.1     0.0
-                AL627309.3     0.0
-                            ... 
-                AC141272.1     0.0
-                AC023491.2     0.0
-                AC007325.1     0.0
-                AC007325.4     0.0
-                AC007325.2     0.0
-    Length: 36601, dtype: float32
-    '''
-    return n, type_tags, [ct]*n, type_sum
+    return type_tags, type_sum
 
-def synthesize_data(cell_groups, st_data, sc_data, xy):
+def synthesize_data(cell_groups, st_data, sc_data, xy, n_bins, n_spots):
     # Synthesize data spot by spot
     
-    st_simu_spatialcorr = sc.AnnData(np.zeros((st_data.shape[0],sc_data.shape[1])),obs=pd.DataFrame(index=st_data.obs.index,columns=['cell_counts','cell_tags','cell_types']))
-    # st_simu_spatialcorr_5 = sc.AnnData(np.zeros((st_data.shape[0],sc_data.shape[1])),obs=pd.DataFrame(index=st_data.obs.index,columns=['cell_counts','cell_tags','cell_types']))
+    # Create AnnData objects for simulation information
+    st_simu = sc.AnnData(np.zeros((st_data.shape[0],sc_data.shape[1])),obs=pd.DataFrame(index=st_data.obs.index,columns=['cell_counts','cell_tags','cell_types']))
 
-    for i in trange(0, 3127):
-        spot_size = np.random.randint(6, 10)
-        prob_inthis_spot = st_data.obsm["pi_cell5"].iloc[i].values
-        mixture = pd.value_counts(np.random.choice(24, spot_size, p=prob_inthis_spot))
+    # Choose cell type for each spot
+    for i in trange(n_spots):
+        spot_size = 1
+        prob_in_spot = st_data.obsm["pi_cell5"].iloc[i].values
+        cell_type = np.random.choice(n_bins, spot_size, p=prob_in_spot)
+        # number can be from 0 to n_bins-1
+
         
         spot_size_true = 0
         spot_tags = []
         spot_types = []
         spot_X = np.zeros(sc_data.shape[1])
         
-        # parsing each cell type
-        for ct, n in mixture.items():
-            spot_size_ct, type_tags, type_list, type_sum = sample_celltype(cell_groups, ct, n)
+        type_tags, type_sum = sample_celltype(cell_groups, cell_type)
             
-            spot_size_true += spot_size_ct
-            spot_tags.extend(type_tags)
-            spot_types.extend(type_list)
+        #spot_size_true += spot_size_ct
+        spot_tags.extend(type_tags)
+        #spot_types.extend(type_list)
             
-            spot_X += type_sum 
+        spot_X += type_sum 
         
-        st_simu_spatialcorr.obs.iloc[i]['cell_counts'] = spot_size_true
-        st_simu_spatialcorr.obs.iloc[i]['cell_tags'] = ','.join(spot_tags)
-        st_simu_spatialcorr.obs.iloc[i]['cell_types'] = ','.join(spot_types)
-        st_simu_spatialcorr.X[i] = spot_X
+        st_simu.obs.iloc[i]['cell_counts'] = spot_size_true
+        st_simu.obs.iloc[i]['cell_tags'] = ','.join(spot_tags)
+        st_simu.obs.iloc[i]['cell_types'] = ','.join(spot_types)
+        st_simu.X[i] = spot_X
 
-    st_simu_spatialcorr.obsm['spatial'] = st_data.obsm['spatial']
-    st_simu_spatialcorr.obs['cell_counts'] = st_simu_spatialcorr.obs['cell_counts'].astype(str)
-    st_simu_spatialcorr.var_names = sc_data.var_names
+    st_simu.obsm['spatial'] = st_data.obsm['spatial']
+    st_simu.obs['cell_counts'] = st_simu.obs['cell_counts'].astype(str)
+    st_simu.var_names = sc_data.var_names
 
-    mapping = st_simu_spatialcorr.obs['cell_tags'].str.split(',',expand=True).stack().reset_index(0)
+    mapping = st_simu.obs['cell_tags'].str.split(',',expand=True).stack().reset_index(0)
     cell2spot_tag = dict(zip(mapping[0],mapping['level_0']))
 
-    spot_tag2xy =dict(zip(st_simu_spatialcorr.obs_names, [f'{x}_{y}' for x,y in xy],))
+    spot_tag2xy =dict(zip(st_simu.obs_names, [f'{x}_{y}' for x,y in xy],))
     cell2xy = {cell:spot_tag2xy[spot_tag] for cell,spot_tag in cell2spot_tag.items()}
 
-    sc_simu_spatialcorr = sc_data[sc_data.obs_names.isin(cell2xy)]
-    sc_simu_spatialcorr.obs['cell2spot_tag'] = sc_simu_spatialcorr.obs_names.map(cell2spot_tag)
-    sc_simu_spatialcorr.obs['cell2xy'] = sc_simu_spatialcorr.obs_names.map(cell2xy)
+    sc_simu = sc_data[sc_data.obs_names.isin(cell2xy)]
+    sc_simu.obs['cell2spot_tag'] = sc_simu.obs_names.map(cell2spot_tag)
+    sc_simu.obs['cell2xy'] = sc_simu.obs_names.map(cell2xy)
 
-    st_simu_spatialcorr.write_h5ad('c:/Users/zoeru/Downloads//simu_data/st_simu_spatialcorr_T=5.h5ad')
-    sc_simu_spatialcorr.write_h5ad('c:/Users/zoeru/Downloads//simu_data/sc_simu_spatialcorr_T=5.h5ad') 
+    # Write simulation h5ad files
+    st_simu.write_h5ad('st_simu.h5ad')
+    sc_simu.write_h5ad('sc_simu.h5ad') 
 
 def config_plotting():
     ## %  config plotting
@@ -589,17 +568,20 @@ def simulate_spatial_expression_data(path, n_bins, n_sc):
     sc_data = load_sc_data(path)
 
     # Determine underlying spatial grid
-    st_data = generate_empty_spatial_image(n_bins, n_sc, sc_data)
+    st_data, n_spots = generate_empty_spatial_image(n_bins, n_sc, sc_data)
     K, xy = distance_matrix(st_data)
     plot_st_data(st_data)
     
-    # Process single cell gene expression data
-    gp_samples = get_gaussian_process_samples(K)
-    st_data = set_temperature(st_data, gp_samples, n_bins, n_sc)
+    # Get GP samples
+    gp_samples = get_gaussian_process_samples(K, n_bins, n_spots)
+
+    # Set temperature using GP samples
+    # st_data = set_temperature(st_data, gp_samples, n_bins, n_sc)
+
     #cell_types = determine_cell_groups(st_data, sc_data)
 
     # Calculate phi and pi values for each spot
-    #synthesize_data(cell_types, st_data, sc_data, xy)
+    #synthesize_data(cell_types, st_data, sc_data, xy, n_bins, n_spots)
 
     # Plot the resulting graph
     plot_spatial_correlated_distribution(st_data)
