@@ -4,13 +4,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import anndata as ad
 import scanpy as sc
-import ot
-import ot.plot
-from ot.datasets import make_1D_gauss as gauss
-import os
-from collections import Counter, defaultdict
 from scipy.spatial.distance import pdist, squareform
-from tqdm import tqdm, trange
+from tqdm import trange
+from PIL import Image
 
 import gene
 from sergio import *
@@ -320,36 +316,25 @@ def get_spatial_coordinates(n_spots):
     return spatial_coordinates
 
 # Generate an empty square spot graph to emulate Visium data
-def generate_empty_spatial_image(n_bins, n_sc, sc_data):
-    # Load Visium spatial image
-    # st_data = sc.read_visium('c:/Users/zoeru/Downloads/STB01S1_preproccesed/STB01S1_preproccesed/outs')
-    # st_data.var_names_make_unique()
-    #print(st_data.uns['spatial'])
+def generate_empty_spatial_image(n_genes, n_bins, n_sc, sc_data):
 
-    # define dimensions of the empty Visium spatial image
-    n_genes = 2000
-    n_spots = n_bins * n_sc # should be n_sc * n_bins
+    # Define dimensions of the empty Visium spatial image
+    n_genes = n_genes
+    n_spots = n_bins * n_sc
 
     spatial_coordinates = get_spatial_coordinates(n_spots)
 
-    # Create a blank AnnData object
-    adata = sc.AnnData(
-        X=np.zeros((n_spots, n_genes)),  # Placeholder for gene expression data
-        obs=pd.DataFrame(index=np.arange(n_spots)),  # Observation metadata
-        var=pd.DataFrame(index=np.arange(n_genes))  # Variable (gene) metadata
+    # Create an AnnData object for spatial transcriptomics data
+    obs_index = [str(i) for i in np.arange(n_spots)]
+    var_index = [str(i) for i in np.arange(n_genes)]
+    st_data = sc.AnnData(
+        X=np.zeros((n_spots, n_genes)),  # placeholder for gene expression data
+        obs=pd.DataFrame(index=obs_index),  # observation metadata
+        var=pd.DataFrame(index=var_index)  # variable (gene) metadata
     )
-    adata.obsm['spatial'] = np.asarray(spatial_coordinates) # Spatial coordinates
+    st_data.obsm['spatial'] = np.asarray(spatial_coordinates) # spatial coordinates
 
-    # Additional metadata, if needed
-    adata.obs['in_tissue'] = [0] * n_spots
-    adata.obs['array_row'] = [0] * n_spots
-    adata.obs['array_col'] = [0] * n_spots
-    adata.var['gene_ids'] = [0] * n_genes
-    adata.var['feature_types'] = [0] * n_genes
-    adata.var['genome'] = [0] * n_genes
-
-    # Print the AnnData object
-    return adata, n_spots
+    return st_data, n_spots
 
 # Compute distance matrix as Kernel   
 # Describes how similar two spots should be based on distance  
@@ -363,20 +348,6 @@ def distance_matrix(st_data):
     K = np.exp(- dist ** 2 / (lamb * sigma ** 2))
     return K, xy
 
-# Plot the empty square spot graph
-def plot_st_data(st_data):
-    spatial_coordinates = st_data.obsm['spatial']
-
-    # Visualize spatial distribution
-    plt.figure(figsize=(8, 8))
-    plt.scatter(spatial_coordinates[:, 0], spatial_coordinates[:, 1], s=50, alpha=0.5)
-    plt.title('Spatial Distribution of Visium Spots')
-    plt.xlabel('X Coordinate')
-    plt.ylabel('Y Coordinate')
-    plt.show()
-
-    return
-
 # Use K as the Kernel matrix of a GP to generate samples for each cell type
 def get_gaussian_process_samples(K, n_bins, n_spots):
     mean = [0]*n_spots
@@ -385,31 +356,28 @@ def get_gaussian_process_samples(K, n_bins, n_spots):
     gp_samples = np.random.multivariate_normal(mean, cov, size=(n_bins,)).T # gp sample for each spot
     return gp_samples
 
-# I don't really get this yet
-# Aka how or why to implement it for our sake
+# Set the temperature
 def set_temperature(st_data, gp_samples, n_bins, n_sc):
     # T is the temperature
     # A small value of T tends to preserve the dominant cell type with the highest energy
     # while a large value of T maintains the original cell type proportions
  
-    cell_abundance = n_sc / (n_sc * n_bins) # code below expects dataframe?
+    cell_abundance = n_sc / (n_sc * n_bins)
    
-    # try T 1-5 for now
+    # try T = 1 and T = 5
     for T in [1, 5]:
         # the cell type proportion at every spot is an 'energy' Phi
-        columns = range(n_bins)
-        columns = [str(col) for col in columns]
+        columns = [str(col) for col in range(n_bins)]
         index = st_data.obs.index
         phi_cell = pd.DataFrame(gp_samples, columns=columns, index=index)
-        # each phi_cell is a cell-type energy vector aligned with spots
-        # the proportion Pi_c_s for each spot and each cell type is then calculated using the energy
+        # for each spot and each cell type:
+        # each Phi is a cell type energy vector aligned with spots
+        # the proportion Pi is then calculated using the energy
         pi_cell = (cell_abundance * np.exp(phi_cell/T)).div((cell_abundance * np.exp(phi_cell/T)).sum(1),axis='index')
         st_data.obsm['pi_cell' + str(T)] = pi_cell # add to existing data
 
         for cell_type, pi in pi_cell.items():
             st_data.obs[str(cell_type) + '_' + str(T)] = pi_cell[cell_type]
-    print(st_data.obsm['pi_cell1'])
-    print(st_data.obsm['pi_cell5'])
     return st_data
 
 # Format gene expression data by cell groups
@@ -419,25 +387,24 @@ def determine_cell_groups(st_data, sc_data):
     celltype_order = st_data.obsm['pi_cell1'].columns.tolist() # list of cell types
     cell_groups = [x for x in sc_data.to_df().groupby(sc_data.obs['Cell Type'],sort=False)] 
     cell_groups.sort(key=lambda x: celltype_order.index(str(x[0])),)
-    cell_groups = [(ct,cell_group.sample(frac=1)) for   ct, cell_group in cell_groups]
-    cell_groups_remains = pd.Series([y.shape[0] for x,y in cell_groups],index = [x for x,y in cell_groups])
+    cell_groups = [(ct,cell_group.sample(frac=1)) for ct, cell_group in cell_groups]
     return cell_groups
 
 # Sample a cell type
-def sample_celltype(cell_groups, cell_type_index, n):
+def sample_cell_type(cell_groups, cell_type_index, n):
     cell_type, type_df = cell_groups[cell_type_index]
     pop_df = type_df.iloc[:n]
     type_df.drop(pop_df.index, inplace=True)
     type_tags = pop_df.index.tolist()
     type_sum = pop_df.sum(0)
     
-    if len(type_tags) == 0:
-        print(f'Warning: {cell_type} has no more cells')
+    # if len(type_tags) == 0:
+    #     print(f'Warning: {cell_type} has no more cells')
     
     return n, type_tags, [str(cell_type)] * n, type_sum
 
 # Synthesize the data spot by spot
-def synthesize_data(cell_groups, st_data, sc_data, xy, n_bins, n_spots):
+def determine_spot_cell_types(cell_groups, st_data, sc_data, xy, n_bins, n_spots):
 
     # Create AnnData objects for simulation information
     st_simu = sc.AnnData(np.zeros((st_data.shape[0],sc_data.shape[1])),obs=pd.DataFrame(index=st_data.obs.index,columns=['cell_counts','cell_tags','cell_types']))
@@ -455,7 +422,7 @@ def synthesize_data(cell_groups, st_data, sc_data, xy, n_bins, n_spots):
         spot_X = np.zeros(sc_data.shape[1])
         
         cell_type_index = choice[0]
-        spot_size_ct, type_tags, type_list, type_sum = sample_celltype(cell_groups, cell_type_index, 1)
+        spot_size_ct, type_tags, type_list, type_sum = sample_cell_type(cell_groups, cell_type_index, 1)
             
         spot_size_true += spot_size_ct
         spot_tags.extend(type_tags)
@@ -478,7 +445,7 @@ def synthesize_data(cell_groups, st_data, sc_data, xy, n_bins, n_spots):
     spot_tag2xy =dict(zip(st_simu.obs_names, [f'{x}_{y}' for x,y in xy],))
     cell2xy = {cell:spot_tag2xy[spot_tag] for cell,spot_tag in cell2spot_tag.items()}
 
-    sc_simu = sc_data[sc_data.obs_names.isin(cell2xy)]
+    sc_simu = sc_data[sc_data.obs_names.isin(cell2xy)].copy()
     sc_simu.obs['cell2spot_tag'] = sc_simu.obs_names.map(cell2spot_tag)
     sc_simu.obs['cell2xy'] = sc_simu.obs_names.map(cell2xy)
 
@@ -486,13 +453,13 @@ def synthesize_data(cell_groups, st_data, sc_data, xy, n_bins, n_spots):
     st_simu.write_h5ad('st_simu.h5ad')
     sc_simu.write_h5ad('sc_simu.h5ad') 
 
-def config_plotting():
+# Configure plots
+def configure_plots():
     ## %  config plotting
     sc.settings._vector_friendly = True
     # p9.theme_set(p9.theme_classic)
     plt.rcParams["svg.fonttype"] = "none"
     plt.rcParams["pdf.fonttype"] = 42
-    plt.rcParams["savefig.transparent"] = True
     plt.rcParams["figure.figsize"] = (4, 4)
         
     plt.rcParams["axes.titlesize"] = 15
@@ -530,36 +497,33 @@ def config_plotting():
     plt.rcParams['lines.linewidth'] = 1.7
     DPI = 300 # dots per inch
 
-def spatial_plots(st_data):
-    # Show underlying image (None)
-    sc.pl.spatial(st_data, alpha=0, img=None, scale_factor=1, spot_size=1)
+# Plot the spatial data for T = 1 and T = 5
+def plot_spatial_data(st_data):
 
-    # Show embedded spots on top of underlying image
-    sc.pl.embedding(st_data, 'spatial')
+    # Configure plots
+    configure_plots() 
+
+    # Leave commented to omit usage of underlying sample image
+    #sc.pl.spatial(st_data, alpha=0, img=None, scale_factor=1, spot_size=1)
 
     # Show embedded spots with color determined by pi value
     # Temperature = 1
-    sc.pl.embedding(st_data, 'spatial', color=[x for x in st_data.obsm['pi_cell1'].columns], cmap='RdBu_r',show=False)
-    plt.suptitle("$T=1$")
+    sc.pl.embedding(st_data, 'spatial', color=[x + '_1' for x in st_data.obsm['pi_cell1'].columns], cmap='RdBu_r', show=False)
+    plt.suptitle("Temperature = 1")
     plt.show()
     # Temperature = 5
-    sc.pl.embedding(st_data, 'spatial', color=[x+'_5' for x in st_data.obsm['pi_cell5'].columns], cmap='RdBu_r',show=False)
-    plt.suptitle("$T=5$")
+    sc.pl.embedding(st_data, 'spatial', color=[x + '_5' for x in st_data.obsm['pi_cell5'].columns], cmap='RdBu_r', show=False)
+    plt.suptitle("Temperature = 5")
     plt.show()
 
-def plot_spatial_correlated_distribution(st_data):
-    config_plotting()
-    spatial_plots(st_data)
-
 # Simulate spatial expression data with Guassian process   
-def simulate_spatial_expression_data(path, n_bins, n_sc):
+def simulate_spatial_expression_data(path, n_genes, n_bins, n_sc):
     # Load single cell gene expression data
     sc_data = load_sc_data(path)
 
     # Determine underlying spatial grid
-    st_data, n_spots = generate_empty_spatial_image(n_bins, n_sc, sc_data)
+    st_data, n_spots = generate_empty_spatial_image(n_genes, n_bins, n_sc, sc_data)
     K, xy = distance_matrix(st_data)
-    # plot_st_data(st_data)
     
     # Get GP samples
     gp_samples = get_gaussian_process_samples(K, n_bins, n_spots)
@@ -567,26 +531,27 @@ def simulate_spatial_expression_data(path, n_bins, n_sc):
     # Set temperature using GP samples
     st_data = set_temperature(st_data, gp_samples, n_bins, n_sc)
 
-    cell_types = determine_cell_groups(st_data, sc_data)
+    # Format cell groups
+    cell_groups = determine_cell_groups(st_data, sc_data)
 
-    # Calculate phi and pi values for each spot
-    synthesize_data(cell_types, st_data, sc_data, xy, n_bins, n_spots)
+    # Calculate Phi and Pi values for each spot
+    determine_spot_cell_types(cell_groups, st_data, sc_data, xy, n_bins, n_spots)
 
     # Plot the resulting graph
-    plot_spatial_correlated_distribution(st_data)
+    plot_spatial_data(st_data)
 
 ##############################################
 # main
 ##############################################
 
 
-def run_spatial(path, n_bins, n_sc):
+def run_spatial(path, n_genes, n_bins, n_sc):
  
     print("--------------------------------------")
     print("   Determining spatial coordinates    ")
     print("--------------------------------------")
 
-    simulate_spatial_expression_data(path, n_bins, n_sc)
+    simulate_spatial_expression_data(path, n_genes, n_bins, n_sc)
     
 
 def run_umap(path, n_neighbors=50, min_dist=0.01):
