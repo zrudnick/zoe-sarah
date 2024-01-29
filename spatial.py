@@ -6,7 +6,6 @@ import anndata as ad
 import scanpy as sc
 from scipy.spatial.distance import pdist, squareform
 from tqdm import trange
-from PIL import Image
 
 import gene
 from sergio import *
