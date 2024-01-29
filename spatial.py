@@ -293,6 +293,7 @@ def add_dummy_counts(gene_expr, n_master_regs):
 def load_sc_data(path):
     # Load SC data
     sc_data = open_h5ad(path)
+    sc_data = ad.AnnData(X=sc_data.X.T, obs=sc_data.var, var=sc_data.obs)
     return sc_data
         
 # Determine random coordinates for each spot
@@ -303,7 +304,6 @@ def get_spatial_coordinates(n_spots):
     for i in range(sqr_n_spots):
         for j in range(sqr_n_spots):
             i_j.add((i, j))
-    print(i_j)
     n_spots_new = 0
     while len(i_j) > 0:
         n_spots_new += 1
@@ -349,7 +349,6 @@ def generate_empty_spatial_image(n_bins, n_sc, sc_data):
     adata.var['genome'] = [0] * n_genes
 
     # Print the AnnData object
-    print(adata)
     return adata, n_spots
 
 # Compute distance matrix as Kernel   
@@ -398,7 +397,8 @@ def set_temperature(st_data, gp_samples, n_bins, n_sc):
     # try T 1-5 for now
     for T in [1, 5]:
         # the cell type proportion at every spot is an 'energy' Phi
-        columns = range(int((n_bins * n_sc) * 0.01))
+        columns = range(n_bins)
+        columns = [str(col) for col in columns]
         index = st_data.obs.index
         phi_cell = pd.DataFrame(gp_samples, columns=columns, index=index)
         # each phi_cell is a cell-type energy vector aligned with spots
@@ -407,49 +407,38 @@ def set_temperature(st_data, gp_samples, n_bins, n_sc):
         st_data.obsm['pi_cell' + str(T)] = pi_cell # add to existing data
 
         for cell_type, pi in pi_cell.items():
-            print(cell_type)
             st_data.obs[str(cell_type) + '_' + str(T)] = pi_cell[cell_type]
+    print(st_data.obsm['pi_cell1'])
+    print(st_data.obsm['pi_cell5'])
     return st_data
 
-# I'm pretty sure this is all useless too 
-# cuz it deals with real cell types
+# Format gene expression data by cell groups
 def determine_cell_groups(st_data, sc_data):
-    # st_data.obsm['pi_cell'].columns.tolist() at this point contains list of cell types
-    # should just be Cell Type 1, Cell Type 2, Cell Type 3, Cell Type 4
-    # would we also have 5, 6, 7, and 8, for dummy nodes?
 
     # Queues of each cell type
     celltype_order = st_data.obsm['pi_cell1'].columns.tolist() # list of cell types
-    print(celltype_order)
-    input()
-    cell_groups = [x for x in sc_data.to_df().groupby(sc_data.obs['cell_type'],sort=False)] 
-    # ('T cell lineage', MIR1302-2HG, FAM138A, ...)
-    # TCTATGCTT..
-    # ACGTGGTTA...
-    # ...
-    print(cell_groups)
-    input()
-    cell_groups.sort(key=lambda x: celltype_order.index(x[0]),)
+    cell_groups = [x for x in sc_data.to_df().groupby(sc_data.obs['Cell Type'],sort=False)] 
+    cell_groups.sort(key=lambda x: celltype_order.index(str(x[0])),)
     cell_groups = [(ct,cell_group.sample(frac=1)) for   ct, cell_group in cell_groups]
-    print(cell_groups)
-    input()
     cell_groups_remains = pd.Series([y.shape[0] for x,y in cell_groups],index = [x for x,y in cell_groups])
     return cell_groups
 
-def sample_celltype(cell_groups, cell_type):
-    pop_df = cell_groups.iloc[:n]
-    cell_groups.drop(pop_df.index, inplace=True)
+# Sample a cell type
+def sample_celltype(cell_groups, cell_type_index, n):
+    cell_type, type_df = cell_groups[cell_type_index]
+    pop_df = type_df.iloc[:n]
+    type_df.drop(pop_df.index, inplace=True)
     type_tags = pop_df.index.tolist()
     type_sum = pop_df.sum(0)
     
     if len(type_tags) == 0:
         print(f'Warning: {cell_type} has no more cells')
     
-    return type_tags, type_sum
+    return n, type_tags, [str(cell_type)] * n, type_sum
 
+# Synthesize the data spot by spot
 def synthesize_data(cell_groups, st_data, sc_data, xy, n_bins, n_spots):
-    # Synthesize data spot by spot
-    
+
     # Create AnnData objects for simulation information
     st_simu = sc.AnnData(np.zeros((st_data.shape[0],sc_data.shape[1])),obs=pd.DataFrame(index=st_data.obs.index,columns=['cell_counts','cell_tags','cell_types']))
 
@@ -457,20 +446,20 @@ def synthesize_data(cell_groups, st_data, sc_data, xy, n_bins, n_spots):
     for i in trange(n_spots):
         spot_size = 1
         prob_in_spot = st_data.obsm["pi_cell5"].iloc[i].values
-        cell_type = np.random.choice(n_bins, spot_size, p=prob_in_spot)
+        choice = np.random.choice(n_bins, spot_size, p=prob_in_spot)
         # number can be from 0 to n_bins-1
-
         
         spot_size_true = 0
         spot_tags = []
         spot_types = []
         spot_X = np.zeros(sc_data.shape[1])
         
-        type_tags, type_sum = sample_celltype(cell_groups, cell_type)
+        cell_type_index = choice[0]
+        spot_size_ct, type_tags, type_list, type_sum = sample_celltype(cell_groups, cell_type_index, 1)
             
-        #spot_size_true += spot_size_ct
+        spot_size_true += spot_size_ct
         spot_tags.extend(type_tags)
-        #spot_types.extend(type_list)
+        spot_types.extend(type_list)
             
         spot_X += type_sum 
         
@@ -570,18 +559,18 @@ def simulate_spatial_expression_data(path, n_bins, n_sc):
     # Determine underlying spatial grid
     st_data, n_spots = generate_empty_spatial_image(n_bins, n_sc, sc_data)
     K, xy = distance_matrix(st_data)
-    plot_st_data(st_data)
+    # plot_st_data(st_data)
     
     # Get GP samples
     gp_samples = get_gaussian_process_samples(K, n_bins, n_spots)
 
     # Set temperature using GP samples
-    # st_data = set_temperature(st_data, gp_samples, n_bins, n_sc)
+    st_data = set_temperature(st_data, gp_samples, n_bins, n_sc)
 
-    #cell_types = determine_cell_groups(st_data, sc_data)
+    cell_types = determine_cell_groups(st_data, sc_data)
 
     # Calculate phi and pi values for each spot
-    #synthesize_data(cell_types, st_data, sc_data, xy, n_bins, n_spots)
+    synthesize_data(cell_types, st_data, sc_data, xy, n_bins, n_spots)
 
     # Plot the resulting graph
     plot_spatial_correlated_distribution(st_data)
