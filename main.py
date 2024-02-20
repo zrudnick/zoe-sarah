@@ -11,17 +11,15 @@ from spatial import *
 # main
 ##############################################
 
-def run_spatial(path, n_genes, n_bins, n_sc):
+def run_spatial(path, n_genes, n_bins, n_sc, T=0.5, lr=2):
+    # T is the temperature to use
+    # lr is the ratio of cells with receptors to ligands
  
     print("--------------------------------------")
     print("   Determining spatial coordinates    ")
     print("--------------------------------------")
 
-    # Ratio of ligands to cells with receptors
-    lr = 1
-
-    simulate_spatial_expression_data(path, n_genes, n_bins, n_sc, lr)
-    
+    simulate_spatial_expression_data(path, n_genes, n_bins, n_sc, T, lr)
 
 def run_umap(path, n_neighbors=50, min_dist=0.01):
     print("--------------------------------------")
@@ -51,7 +49,6 @@ def run_sergio(interaction_pairs, n_sc=300, hill_coeff=1.0, interaction_strength
 
     return n_genes, n_bins, n_sc
 
-
-n_genes, n_bins, n_sc = run_sergio("interaction_pairs/interaction_pairs_v3_small.csv")
+# n_genes, n_bins, n_sc = run_sergio("interaction_pairs/interaction_pairs_v3_small.csv")
 # run_umap("gene_expression.h5ad")
-run_spatial("gene_expression.h5ad", n_genes, n_bins, n_sc)
+run_spatial("gene_expression.h5ad", n_genes=50, n_bins=8, n_sc=300)

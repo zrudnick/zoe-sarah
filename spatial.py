@@ -21,24 +21,23 @@ def load_sc_data(path):
 # Determine random coordinates for each spot
 def get_spatial_coordinates(n_spots):
     sqr_n_spots = int(n_spots**0.5)
+
+    # Create square of spots
     spatial_coordinates = []
-    i_j = set()
     for i in range(sqr_n_spots):
         for j in range(sqr_n_spots):
-            i_j.add((i, j))
-    n_spots_new = 0
-    while len(i_j) > 0:
-        n_spots_new += 1
-        (i_curr, j_curr) = list(i_j)[np.random.choice(len(i_j))]
-        i_j.remove((i_curr, j_curr))
-        spatial_coordinates.append((i_curr, j_curr))
+            spatial_coordinates.append((i, j))
+    
+    # Add extra spots that didn't fit in square
+    n_spots_new = sqr_n_spots**2
     (i_curr, j_curr) = sqr_n_spots, 0
     while n_spots_new < n_spots:
         spatial_coordinates.append((i_curr, j_curr))
-        (i_curr, j_curr) = (i_curr, j_curr + 1)
         n_spots_new += 1
+        j_curr += 1
         if j_curr == sqr_n_spots:
-            (i_curr, j_curr) = (i_curr + 1, 0)
+            i_curr += 1
+            j_curr = 0
     return spatial_coordinates
 
 # Generate an empty square spot graph to emulate Visium data
@@ -46,7 +45,7 @@ def generate_empty_spatial_image(n_genes, n_bins, n_sc, sc_data, lr):
 
     # Define dimensions of the empty Visium spatial image
     n_genes = n_genes
-    n_ligand = n_sc // lr
+    n_ligand = (n_sc // lr) // 2
     n_spots = n_bins * (n_sc + n_ligand)
 
     spatial_coordinates = get_spatial_coordinates(n_spots)
@@ -83,7 +82,7 @@ def get_gaussian_process_samples(K, n_bins, n_spots):
     gp_samples = np.random.multivariate_normal(mean, cov, size=(n_bins,)).T # gp sample for each spot
     return gp_samples
 
-# Set the temperatures (T = 1 and T = 5)
+# Set the temperatures
 def set_temperature(st_data, gp_samples, n_bins, n_sc):
     # T is the temperature
     # A small value of T tends to preserve the dominant cell type with the highest energy
@@ -91,8 +90,7 @@ def set_temperature(st_data, gp_samples, n_bins, n_sc):
  
     cell_abundance = n_sc / (n_sc * n_bins)
    
-    # try T = 1 and T = 5
-    for T in [1, 5]:
+    for T in [0.5, 1.0]:
         # the cell type proportion at every spot is an 'energy' Phi
         columns = [str(col) for col in range(n_bins)]
         index = st_data.obs.index
@@ -100,109 +98,100 @@ def set_temperature(st_data, gp_samples, n_bins, n_sc):
         # for each spot and each cell type:
         # each Phi is a cell type energy vector aligned with spots
         # the proportion Pi is then calculated using the energy
-        pi_cell = (cell_abundance * np.exp(phi_cell/T)).div((cell_abundance * np.exp(phi_cell/T)).sum(1),axis='index')
-        st_data.obsm['pi_cell' + str(T)] = pi_cell # add to existing data
+        pi_cell = (cell_abundance * np.exp(phi_cell/(T))).div((cell_abundance * np.exp(phi_cell/(T))).sum(1),axis='index')
+        st_data.obsm['Pi Cell ' + str(T)] = pi_cell # add to existing data
 
         for cell_type, pi in pi_cell.items():
-            st_data.obs[str(cell_type) + '_' + str(T)] = pi_cell[cell_type]
+            st_data.obs[str(cell_type) + ' ' + str(T)] = pi_cell[cell_type]
     return st_data, cell_abundance
 
 # Format gene expression data by cell groups
 def determine_cell_groups(st_data, sc_data):
 
     # Queues of each cell type
-    celltype_order = st_data.obsm['pi_cell1'].columns.tolist() # list of cell types
+    celltype_order = st_data.obsm['Pi Cell 1.0'].columns.tolist() # list of cell types
     cell_groups = [x for x in sc_data.to_df().groupby(sc_data.obs['Cell Type'],sort=False)] 
     cell_groups.sort(key=lambda x: celltype_order.index(str(x[0])),)
     cell_groups = [(ct,cell_group.sample(frac=1)) for ct, cell_group in cell_groups]
     return cell_groups
 
 # Sample a cell type
-def sample_cell_type(cell_groups, cell_type_index, n):
+def sample_cell_type(cell_groups, cell_type_index, n_bins):
     cell_type, type_df = cell_groups[cell_type_index]
-    pop_df = type_df.iloc[:n]
+    pop_df = type_df.iloc[:1]
     type_df.drop(pop_df.index, inplace=True)
     type_tags = pop_df.index.tolist()
     type_sum = pop_df.sum(0)
     
-    # if len(type_tags) == 0:
-    #     print(f'Warning: {cell_type} has no more cells')
+    if cell_type < (n_bins // 2):
+        type_list = ["Cell Type " + str(cell_type)]
+    else: type_list = ["Cell Type " + str(cell_type)]
     
-    return n, type_tags, [str(cell_type)] * n, type_sum
+    return type_tags, type_list, type_sum
 
 # Sample the previous seen cell type's corresponding ligand producing cell
-def sample_ligand_cell(cell_groups, cell_type_index, n_bins, n):
+def sample_ligand_cell(cell_groups, cell_type_index, n_bins):
     receptor_cell_type, _ = cell_groups[cell_type_index]
     cell_type = receptor_cell_type + n_bins
     
     type_tags = [str(cell_type)]
-    type_sum = -1
+    type_sum = 0
     
-    return n, type_tags, [str(cell_type)] * n, type_sum
+    return type_tags, ["Ligand Cell " + str(receptor_cell_type)], type_sum
 
 # Synthesize the data spot by spot
-def determine_spot_cell_types(cell_groups, st_data, sc_data, xy, n_bins, n_spots, lr):
+def determine_spot_cell_types(cell_groups, st_data, sc_data, xy, n_bins, n_spots, T, lr):
 
     # Create AnnData objects for simulation information
-    st_simu = sc.AnnData(np.zeros((st_data.shape[0],sc_data.shape[1])),obs=pd.DataFrame(index=st_data.obs.index,columns=['cell_counts','cell_tags','cell_types']))
+    st_simu = sc.AnnData(np.zeros((st_data.shape[0],sc_data.shape[1])),obs=pd.DataFrame(index=st_data.obs.index,columns=['Cell Tags','Cell Types']))
     cell_type_index = None
+    j = 0 # index for ligand placement
 
     # Choose cell type for each spot
     for i in trange(n_spots):
-        spot_size_true = 0
         spot_tags = []
         spot_types = []
         spot_X = np.zeros(sc_data.shape[1])
         spot_size = 1
 
-        if (i % (lr + 1) == 1): # if a ligand should be placed
-            spot_size_ct, type_tags, type_list, type_sum = sample_ligand_cell(cell_groups, cell_type_index, n_bins, spot_size)
+        if (j % (lr + 1) == 1): # if a ligand should be placed
+            type_tags, type_list, type_sum = sample_ligand_cell(cell_groups, cell_type_index, n_bins)
+            j += 1
         else:
-            prob_in_spot = st_data.obsm["pi_cell5"].iloc[i].values # put cells with similar receptor expression together
+            prob_in_spot = st_data.obsm["Pi Cell " + str(T)].iloc[i].values # put cells with similar receptor expression together
             choice = np.random.choice(n_bins, spot_size, p=prob_in_spot)
+            if choice < (n_bins // 2):
+                j += 1
             cell_type_index = choice[0]
-            spot_size_ct, type_tags, type_list, type_sum = sample_cell_type(cell_groups, cell_type_index, spot_size)
+            type_tags, type_list, type_sum = sample_cell_type(cell_groups, cell_type_index, n_bins)
             
-        spot_size_true += spot_size_ct
         spot_tags.extend(type_tags)
         spot_types.extend(type_list)
             
         spot_X += type_sum 
         
-        st_simu.obs.iloc[i]['cell_counts'] = spot_size_true
-        st_simu.obs.iloc[i]['cell_tags'] = ','.join(spot_tags)
-        st_simu.obs.iloc[i]['cell_types'] = ','.join(spot_types)
+        st_simu.obs.iloc[i]['Cell Tags'] = ','.join(spot_tags)
+        st_simu.obs.iloc[i]['Cell Types'] = ','.join(spot_types)
         st_simu.X[i] = spot_X
 
-    print(st_simu.X)
-
     st_simu.obsm['spatial'] = st_data.obsm['spatial']
-    st_simu.obs['cell_counts'] = st_simu.obs['cell_counts'].astype(str)
     st_simu.var_names = sc_data.var_names
 
-    mapping = st_simu.obs['cell_tags'].str.split(',',expand=True).stack().reset_index(0)
+    mapping = st_simu.obs['Cell Tags'].str.split(',',expand=True).stack().reset_index(0)
     cell2spot_tag = dict(zip(mapping[0],mapping['level_0']))
 
     spot_tag2xy =dict(zip(st_simu.obs_names, [f'{x}_{y}' for x,y in xy],))
     cell2xy = {cell:spot_tag2xy[spot_tag] for cell,spot_tag in cell2spot_tag.items()}
 
     sc_simu = sc_data[sc_data.obs_names.isin(cell2xy)].copy()
-    sc_simu.obs['cell2spot_tag'] = sc_simu.obs_names.map(cell2spot_tag)
-    sc_simu.obs['cell2xy'] = sc_simu.obs_names.map(cell2xy)
+    sc_simu.obs['Cell To Spot Tag'] = sc_simu.obs_names.map(cell2spot_tag)
+    sc_simu.obs['Cell To XY'] = sc_simu.obs_names.map(cell2xy)
 
     # Write simulation h5ad files
     st_simu.write_h5ad('st_simu.h5ad')
     sc_simu.write_h5ad('sc_simu.h5ad') 
 
     return st_simu, sc_simu
-
-    # to verify results:
-    # plot expression of particular genes in actual grid
-    # plot downstream genes
-
-    # to add ligand:
-    # replace or do while simulating data?
-    # 1:n ligand expression (start with n=1)
 
 # Configure plots
 def configure_plots():
@@ -211,10 +200,10 @@ def configure_plots():
     plt.rcParams["pdf.fonttype"] = 42
     plt.rcParams["figure.figsize"] = (4, 4)
         
-    plt.rcParams["axes.titlesize"] = 15
+    plt.rcParams["axes.titlesize"] = 12
     plt.rcParams["axes.titleweight"] = 500
     plt.rcParams["axes.titlepad"] = 8.0
-    plt.rcParams["axes.labelsize"] = 14
+    plt.rcParams["axes.labelsize"] = 10
     plt.rcParams["axes.labelweight"] = 500
     plt.rcParams["axes.linewidth"] = 1.2
     plt.rcParams["axes.labelpad"] = 6.0
@@ -246,42 +235,47 @@ def configure_plots():
     DPI = 300 # dots per inch
 
 def plot_pi_values(st_data):
-    # Temperature = 1
-    sc.pl.embedding(st_data, 'spatial', color=[x + '_1' for x in st_data.obsm['pi_cell1'].columns], cmap='RdBu_r', show=False)
-    plt.suptitle("Temperature = 1")
+    # Temperature = 0.5
+    sc.pl.embedding(st_data, 'spatial', color=[x + ' 0.5' for x in st_data.obsm['Pi Cell 0.5'].columns], cmap='winter', show=False)
+    plt.suptitle("Temperature = 0.5")
     plt.show()
 
-    # Temperature = 5
-    sc.pl.embedding(st_data, 'spatial', color=[x + '_5' for x in st_data.obsm['pi_cell5'].columns], cmap='RdBu_r', show=False)
-    plt.suptitle("Temperature = 5")
+    # Temperature = 1.0
+    sc.pl.embedding(st_data, 'spatial', color=[x + ' 1.0' for x in st_data.obsm['Pi Cell 1.0'].columns], cmap='winter', show=False)
+    plt.suptitle("Temperature = 1.0")
     plt.show()
 
     # sc.pl.embedding(sc_simu, 'spatial', color=[x + '' for x in sc_simu.obs['cell2xy']], cmap='RdBu_r', show=False)
     # plt.show()
 
 def plot_cell_types(st_simu, st_data):
-    pi_cell_discrete = st_simu.obs['cell_types'].str.split(',',expand=True).apply(pd.value_counts,axis=1)
-    
-    st_data.obsm['pi_cell_discrete'] = pi_cell_discrete
+    pi_cell_discrete = st_simu.obs['Cell Types'].str.split(',',expand=True).apply(pd.Series.value_counts, axis=1)
+    pi_cell_discrete = pi_cell_discrete.fillna(0).astype(int)
+
+    # T = 0.5
+    st_data.obsm['Pi Cell Discrete'] = pi_cell_discrete
     for ct,pi in pi_cell_discrete.items():
-        st_data.obs[ct+'_discrete'] = pi_cell_discrete[ct]
-    sc.pl.embedding(st_data, 'spatial', color=[x+'_discrete' for x in st_data.obsm['pi_cell_discrete'].columns], cmap='RdBu_r',show=False)
-    plt.suptitle("Discrete T=1")
+        st_data.obs[ct] = pi_cell_discrete[ct]
+    sc.pl.embedding(st_data, 'spatial', color=[x for x in st_data.obsm['Pi Cell Discrete'].columns], cmap='winter',show=False)
+    plt.suptitle("Cell Type Distribution, T = 0.5")
     plt.show()
 
-    # T = 5
-    pi_cell_discrete = st_simu.obs['cell_types'].str.split(',',expand=True).apply(pd.value_counts,axis=1)
-    
-    st_data.obsm['pi_cell_discrete'] = pi_cell_discrete
-    for ct,pi in pi_cell_discrete.items():
-        st_data.obs[ct+'_discrete'] = pi_cell_discrete[ct]
+def plot_spatial_data_genes(st_data, sc_data):
 
-    sc.pl.embedding(st_data, 'spatial', color=[x+'_discrete' for x in st_data.obsm['pi_cell_discrete'].columns], cmap='RdBu_r',show=False)
-    plt.suptitle("Discrete T=5")
+    # Calculate mean gene expression across cells
+    gene_expr = sc_data[:,:].X.flatten()
+    #print(gene_expr)
+
+    ############################### HERE
+    # Plotting
+    sc.pl.embedding(st_data, 'spatial', color=[str(x) for x in gene_expr], cmap='RdBu_r', show=False)
+    plt.suptitle("Gene Expression (Mean)")
+    plt.colorbar(label='Mean Gene Expression')
     plt.show()
+    ###############################
 
 # Plot the spatial data for T = 1 and T = 5
-def plot_spatial_data(st_data, st_simu, sc_simu, cell_abundance):
+def plot_spatial_data(st_data, st_simu, sc_data, sc_simu, cell_abundance):
 
     # Configure plots
     configure_plots() 
@@ -290,13 +284,14 @@ def plot_spatial_data(st_data, st_simu, sc_simu, cell_abundance):
     #sc.pl.spatial(st_data, alpha=0, img=None, scale_factor=1, spot_size=1)
 
     # Show embedded spots with color determined by Pi value
-    plot_pi_values(st_data)
+    # plot_pi_values(st_data)
 
     # Show embedded spots with color determined by cell
-    #plot_cell_types(st_simu, st_data)
+    plot_cell_types(st_simu, st_data)
+    #plot_spatial_data_genes(st_data, sc_data)
 
 # Simulate spatial expression data with Guassian process   
-def simulate_spatial_expression_data(path, n_genes, n_bins, n_sc, lr):
+def simulate_spatial_expression_data(path, n_genes, n_bins, n_sc, T, lr):
     # Load single cell gene expression data
     sc_data = load_sc_data(path)
 
@@ -314,7 +309,7 @@ def simulate_spatial_expression_data(path, n_genes, n_bins, n_sc, lr):
     cell_groups = determine_cell_groups(st_data, sc_data)
 
     # Calculate Phi and Pi values for each spot
-    st_simu, sc_simu = determine_spot_cell_types(cell_groups, st_data, sc_data, xy, n_bins, n_spots, lr)
+    st_simu, sc_simu = determine_spot_cell_types(cell_groups, st_data, sc_data, xy, n_bins, n_spots, T, lr)
 
     # Plot the resulting graph
-    plot_spatial_data(st_data, st_simu, sc_simu, cell_abundance)
+    plot_spatial_data(st_data, st_simu, sc_data, sc_simu, cell_abundance)
