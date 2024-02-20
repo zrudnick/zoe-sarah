@@ -9,7 +9,7 @@ def open_h5ad(path):
     adata = ad.read_h5ad(path)
     return adata
 
-def make_h5ad(gene_expr, ad_path, n_sc):
+def gene_expr_to_h5ad(gene_expr, ad_path, n_sc):
     gene_ids = [i for i in range(len(gene_expr))]
     cell_ids = [j for j in range(len(gene_expr[0]))]
     cell_types = [(cell_id // n_sc) for cell_id in cell_ids]

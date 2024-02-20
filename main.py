@@ -11,7 +11,7 @@ from spatial import *
 # main
 ##############################################
 
-def run_spatial(path, n_genes, n_bins, n_sc, T=0.5, lr=2):
+def run_spatial(path, n_genes, n_bins, n_sc, T=0.5, lr=5):
     # T is the temperature to use
     # lr is the ratio of cells with receptors to ligands
  
@@ -45,10 +45,15 @@ def run_sergio(interaction_pairs, n_sc=300, hill_coeff=1.0, interaction_strength
     sim, expr = steady_state_clean_data(n_genes, n_bins, n_sc)
     gene_expr = steady_state_technical_noise(sim, expr, n_genes, n_master_regs)
     #add_dummy_counts(gene_expr, n_master_regs)
-    adata = make_h5ad(gene_expr, ad_path, n_sc)
+    adata = gene_expr_to_h5ad(gene_expr, ad_path, n_sc)
 
     return n_genes, n_bins, n_sc
 
-# n_genes, n_bins, n_sc = run_sergio("interaction_pairs/interaction_pairs_v3_small.csv")
+n_genes, n_bins, n_sc = run_sergio("interaction_pairs/interaction_pairs_v3_small.csv")
 # run_umap("gene_expression.h5ad")
-run_spatial("gene_expression.h5ad", n_genes=50, n_bins=8, n_sc=300)
+run_spatial("gene_expression.h5ad", n_genes, n_bins, n_sc)
+
+# add ligand to gene expression matrix
+# add 1 for ligand gene and 0 for other genes
+# get correspondance list of master regulator to cell type
+# or rename things

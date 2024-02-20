@@ -41,7 +41,7 @@ def get_spatial_coordinates(n_spots):
     return spatial_coordinates
 
 # Generate an empty square spot graph to emulate Visium data
-def generate_empty_spatial_image(n_genes, n_bins, n_sc, sc_data, lr):
+def generate_empty_spatial_image(n_genes, n_bins, n_sc, lr):
 
     # Define dimensions of the empty Visium spatial image
     n_genes = n_genes
@@ -234,6 +234,7 @@ def configure_plots():
     plt.rcParams['lines.linewidth'] = 1.7
     DPI = 300 # dots per inch
 
+# Plot Pi value distributions of each cell type
 def plot_pi_values(st_data):
     # Temperature = 0.5
     sc.pl.embedding(st_data, 'spatial', color=[x + ' 0.5' for x in st_data.obsm['Pi Cell 0.5'].columns], cmap='winter', show=False)
@@ -248,6 +249,7 @@ def plot_pi_values(st_data):
     # sc.pl.embedding(sc_simu, 'spatial', color=[x + '' for x in sc_simu.obs['cell2xy']], cmap='RdBu_r', show=False)
     # plt.show()
 
+# Plot xy locations of each cell type
 def plot_cell_types(st_simu, st_data):
     pi_cell_discrete = st_simu.obs['Cell Types'].str.split(',',expand=True).apply(pd.Series.value_counts, axis=1)
     pi_cell_discrete = pi_cell_discrete.fillna(0).astype(int)
@@ -273,7 +275,33 @@ def plot_spatial_data(st_data, st_simu, sc_data, sc_simu, cell_abundance):
     # plot_pi_values(st_data)
 
     # Show embedded spots with color determined by cell
-    plot_cell_types(st_simu, st_data)
+    # plot_cell_types(st_simu, st_data)
+
+# Add ligand cells to gene expression data
+def add_ligand_cells(path, sc_data, n_genes, n_bins, n_sc, lr):
+    n_sc_ligand = ((n_sc // lr) // 2) * n_bins
+    n_bins_ligand = n_bins // 2
+    n_genes_ligand = n_bins_ligand + n_genes
+    
+    gene_expr = sc_data.X
+
+    # Add ligand genes (expression = 0) for existing cells
+    for i in range(n_bins_ligand):
+        empty_col = [0 for k in range(n_sc * n_bins)]
+        gene_expr = np.concatenate([gene_expr, pd.DataFrame(empty_col)], axis=1)
+
+    # Add new rows for all ligand single cells
+    for i in range(n_bins_ligand):
+
+        # Split by ligand cell type
+        for j in range(n_sc_ligand):
+            empty_row = [0 for k in range(n_genes_ligand)]
+            gene = i + n_genes
+            empty_row[gene] = 25           # default gene expression rate? put in an average
+            gene_expr = np.concatenate([gene_expr, pd.DataFrame(empty_row).T], axis=0)
+    
+    sc_data = gene_expr_to_h5ad(gene_expr, path, n_sc + n_sc_ligand)
+    return sc_data
 
 # Simulate spatial expression data with Guassian process   
 def simulate_spatial_expression_data(path, n_genes, n_bins, n_sc, T, lr):
@@ -281,7 +309,7 @@ def simulate_spatial_expression_data(path, n_genes, n_bins, n_sc, T, lr):
     sc_data = load_sc_data(path)
 
     # Determine underlying spatial grid
-    st_data, n_spots = generate_empty_spatial_image(n_genes, n_bins, n_sc, sc_data, lr)
+    st_data, n_spots = generate_empty_spatial_image(n_genes, n_bins, n_sc, lr)
     K, xy = distance_matrix(st_data)
     
     # Get GP samples
@@ -298,3 +326,6 @@ def simulate_spatial_expression_data(path, n_genes, n_bins, n_sc, T, lr):
 
     # Plot the resulting graph
     plot_spatial_data(st_data, st_simu, sc_data, sc_simu, cell_abundance)
+
+    # Add ligand cells to gene expression matrix
+    add_ligand_cells(path, sc_data, n_genes, n_bins, n_sc, lr)
