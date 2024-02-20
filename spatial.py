@@ -260,20 +260,6 @@ def plot_cell_types(st_simu, st_data):
     plt.suptitle("Cell Type Distribution, T = 0.5")
     plt.show()
 
-def plot_spatial_data_genes(st_data, sc_data):
-
-    # Calculate mean gene expression across cells
-    gene_expr = sc_data[:,:].X.flatten()
-    #print(gene_expr)
-
-    ############################### HERE
-    # Plotting
-    sc.pl.embedding(st_data, 'spatial', color=[str(x) for x in gene_expr], cmap='RdBu_r', show=False)
-    plt.suptitle("Gene Expression (Mean)")
-    plt.colorbar(label='Mean Gene Expression')
-    plt.show()
-    ###############################
-
 # Plot the spatial data for T = 1 and T = 5
 def plot_spatial_data(st_data, st_simu, sc_data, sc_simu, cell_abundance):
 
@@ -281,14 +267,13 @@ def plot_spatial_data(st_data, st_simu, sc_data, sc_simu, cell_abundance):
     configure_plots() 
 
     # Leave commented to omit usage of underlying sample image
-    #sc.pl.spatial(st_data, alpha=0, img=None, scale_factor=1, spot_size=1)
+    # sc.pl.spatial(st_data, alpha=0, img=None, scale_factor=1, spot_size=1)
 
     # Show embedded spots with color determined by Pi value
     # plot_pi_values(st_data)
 
     # Show embedded spots with color determined by cell
     plot_cell_types(st_simu, st_data)
-    #plot_spatial_data_genes(st_data, sc_data)
 
 # Simulate spatial expression data with Guassian process   
 def simulate_spatial_expression_data(path, n_genes, n_bins, n_sc, T, lr):
