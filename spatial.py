@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import scanpy as sc
+import math
 
 from scipy.spatial.distance import pdist, squareform
 from tqdm import trange
@@ -22,7 +23,7 @@ def load_sc_data(path):
 def get_spatial_coordinates(n_spots):
     sqr_n_spots = int(n_spots**0.5)
 
-    # Create square of spots
+    # Create square grid of spots
     spatial_coordinates = []
     for i in range(sqr_n_spots):
         for j in range(sqr_n_spots):
@@ -45,16 +46,21 @@ def generate_empty_spatial_image(n_genes, n_bins, n_sc, lr):
 
     # Define dimensions of the empty Visium spatial image
     n_genes = n_genes
-    n_ligand = (n_sc // lr) // 2
-    n_spots = n_bins * (n_sc + n_ligand)
+    n_sc_ligand = n_sc // lr
+
+
+    n_bins_ligand = n_bins // 2
+    n_genes_ligand = n_bins_ligand + n_genes
+
+    n_spots = (n_bins * n_sc) + (n_bins_ligand * n_sc_ligand)
 
     spatial_coordinates = get_spatial_coordinates(n_spots)
 
     # Create an AnnData object for spatial transcriptomics data
     obs_index = [str(i) for i in np.arange(n_spots)]
-    var_index = [str(i) for i in np.arange(n_genes)]
+    var_index = [str(i) for i in np.arange(n_genes_ligand)]
     st_data = sc.AnnData(
-        X=np.zeros((n_spots, n_genes)),  # placeholder for gene expression data
+        X=np.zeros((n_spots, n_genes_ligand)),  # placeholder for gene expression data
         obs=pd.DataFrame(index=obs_index),  # observation metadata
         var=pd.DataFrame(index=var_index)  # variable (gene) metadata
     )
@@ -278,12 +284,16 @@ def plot_spatial_data(st_data, st_simu, sc_data, sc_simu, cell_abundance):
     # plot_cell_types(st_simu, st_data)
 
 # Add ligand cells to gene expression data
-def add_ligand_cells(path, sc_data, n_genes, n_bins, n_sc, lr):
-    n_sc_ligand = ((n_sc // lr) // 2) * n_bins
+def add_ligand_cells(path, sc_data, st_data, n_genes, n_bins, n_sc, lr):
+    n_sc_ligand = n_sc // lr
     n_bins_ligand = n_bins // 2
     n_genes_ligand = n_bins_ligand + n_genes
-    
     gene_expr = sc_data.X
+
+    # Compute the average non-zero gene expression
+    # Usually 22 - 24
+    mask = gene_expr != 0
+    average_non_zero = math.ceil(np.mean(gene_expr[mask]))
 
     # Add ligand genes (expression = 0) for existing cells
     for i in range(n_bins_ligand):
@@ -291,19 +301,18 @@ def add_ligand_cells(path, sc_data, n_genes, n_bins, n_sc, lr):
         gene_expr = np.concatenate([gene_expr, pd.DataFrame(empty_col)], axis=1)
 
     # Add new rows for all ligand single cells
-    for i in range(n_bins_ligand):
-
-        # Split by ligand cell type
-        for j in range(n_sc_ligand):
-            empty_row = [0 for k in range(n_genes_ligand)]
-            gene = i + n_genes
-            empty_row[gene] = 25           # default gene expression rate? put in an average
-            gene_expr = np.concatenate([gene_expr, pd.DataFrame(empty_row).T], axis=0)
+    # Split by ligand cell type
+    for i in range(n_bins_ligand * n_sc_ligand):
+        empty_row = [0 for k in range(n_genes_ligand)]
+        gene = (i // n_sc_ligand) + n_genes
+        empty_row[gene] = average_non_zero          # average gene expression rate
+        gene_expr = np.concatenate([gene_expr, pd.DataFrame(empty_row).T], axis=0)
     
     sc_data = gene_expr_to_h5ad(gene_expr, path, n_sc + n_sc_ligand)
-    return sc_data
+    st_data.X = gene_expr
+    return sc_data, st_data
 
-# Simulate spatial expression data with Guassian process   
+# Simulate spatial expression data with Gaussian process   
 def simulate_spatial_expression_data(path, n_genes, n_bins, n_sc, T, lr):
     # Load single cell gene expression data
     sc_data = load_sc_data(path)
@@ -328,4 +337,4 @@ def simulate_spatial_expression_data(path, n_genes, n_bins, n_sc, T, lr):
     plot_spatial_data(st_data, st_simu, sc_data, sc_simu, cell_abundance)
 
     # Add ligand cells to gene expression matrix
-    add_ligand_cells(path, sc_data, n_genes, n_bins, n_sc, lr)
+    sc_data, st_data = add_ligand_cells(path, sc_data, st_data, n_genes, n_bins, n_sc, lr)
