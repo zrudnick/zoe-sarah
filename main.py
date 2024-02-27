@@ -36,7 +36,7 @@ def run_umap(path, n_neighbors=50, min_dist=0.01):
     sc.pl.umap(adata, color=["Cell Type", "16", "17", "18", "19"])
 
 def run_sergio(interaction_pairs, n_sc=300, hill_coeff=1.0, interaction_strength=1.0, basal_prod_type=""):
-    n_genes, n_master_regs, n_bins = input_file_format(interaction_pairs, hill_coeff, interaction_strength, basal_prod_type)
+    n_genes, n_master_regs, n_bins, target_ids = input_file_format(interaction_pairs, hill_coeff, interaction_strength, basal_prod_type)
     ad_path = "gene_expression.h5ad"
 
     print("--------------------------------------")
@@ -45,7 +45,7 @@ def run_sergio(interaction_pairs, n_sc=300, hill_coeff=1.0, interaction_strength
     sim, expr = steady_state_clean_data(n_genes, n_bins, n_sc)
     gene_expr = steady_state_technical_noise(sim, expr, n_genes, n_master_regs)
     #add_dummy_counts(gene_expr, n_master_regs) # use to join counts for cells close/far from ligand
-    adata = gene_expr_to_h5ad(gene_expr, ad_path, n_sc)
+    adata = gene_expr_to_h5ad_with_gene_names(gene_expr, ad_path, n_sc, target_ids)
 
     return n_genes, n_bins, n_sc
 
