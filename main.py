@@ -52,3 +52,6 @@ def run_sergio(interaction_pairs, n_sc=300, hill_coeff=1.0, interaction_strength
 n_genes, n_bins, n_sc = run_sergio("interaction_pairs/interaction_pairs_v3_small.csv")
 # run_umap("gene_expression.h5ad")
 run_spatial("gene_expression.h5ad", n_genes, n_bins, n_sc)
+
+# have ligand expression correlate to the master regulator expression
+# at the level of the single cell

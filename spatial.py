@@ -48,9 +48,8 @@ def generate_empty_spatial_image(n_genes, n_bins, n_sc, lr):
     n_genes = n_genes
     n_sc_ligand = n_sc // lr
 
-
     n_bins_ligand = n_bins // 2
-    n_genes_ligand = n_bins_ligand + n_genes
+    n_genes_ligand = n_bins_ligand + n_genes # 1 more gene per ligand cell type
 
     n_spots = (n_bins * n_sc) + (n_bins_ligand * n_sc_ligand)
 
@@ -143,7 +142,7 @@ def sample_ligand_cell(cell_groups, cell_type_index, n_bins):
     type_tags = [str(cell_type)]
     type_sum = 0
     
-    return type_tags, ["Ligand Cell " + str(receptor_cell_type)], type_sum
+    return receptor_cell_type, type_tags, ["Ligand Cell " + str(receptor_cell_type)], type_sum
 
 # Synthesize the data spot by spot
 def determine_spot_cell_types(cell_groups, st_data, sc_data, xy, n_bins, n_spots, T, lr):
@@ -152,6 +151,8 @@ def determine_spot_cell_types(cell_groups, st_data, sc_data, xy, n_bins, n_spots
     st_simu = sc.AnnData(np.zeros((st_data.shape[0],sc_data.shape[1])),obs=pd.DataFrame(index=st_data.obs.index,columns=['Cell Tags','Cell Types']))
     cell_type_index = None
     j = 0 # index for ligand placement
+    k = 0 # index for ligand count
+    ligand_gene_expr = dict()
 
     # Choose cell type for each spot
     for i in trange(n_spots):
@@ -161,8 +162,10 @@ def determine_spot_cell_types(cell_groups, st_data, sc_data, xy, n_bins, n_spots
         spot_size = 1
 
         if (j % (lr + 1) == 1): # if a ligand should be placed
-            type_tags, type_list, type_sum = sample_ligand_cell(cell_groups, cell_type_index, n_bins)
+            receptor_cell_type, type_tags, type_list, type_sum = sample_ligand_cell(cell_groups, cell_type_index, n_bins)
+            ligand_gene_expr[k] = sc_data.X[i-1-j, :], receptor_cell_type
             j += 1
+            k += 1
         else:
             prob_in_spot = st_data.obsm["Pi Cell " + str(T)].iloc[i].values # put cells with similar receptor expression together
             choice = np.random.choice(n_bins, spot_size, p=prob_in_spot)
@@ -197,7 +200,7 @@ def determine_spot_cell_types(cell_groups, st_data, sc_data, xy, n_bins, n_spots
     st_simu.write_h5ad('st_simu.h5ad')
     sc_simu.write_h5ad('sc_simu.h5ad') 
 
-    return st_simu, sc_simu
+    return st_simu, sc_simu, ligand_gene_expr
 
 # Configure plots
 def configure_plots():
@@ -278,13 +281,13 @@ def plot_spatial_data(st_data, st_simu, sc_data, sc_simu, cell_abundance):
     # sc.pl.spatial(st_data, alpha=0, img=None, scale_factor=1, spot_size=1)
 
     # Show embedded spots with color determined by Pi value
-    # plot_pi_values(st_data)
+    plot_pi_values(st_data)
 
     # Show embedded spots with color determined by cell
-    # plot_cell_types(st_simu, st_data)
+    plot_cell_types(st_simu, st_data)
 
 # Add ligand cells to gene expression data
-def add_ligand_cells(path, sc_data, st_data, n_genes, n_bins, n_sc, lr):
+def add_ligand_cells(path, sc_data, st_data, ligand_gene_expr, n_genes, n_bins, n_sc, lr):
     n_sc_ligand = n_sc // lr
     n_bins_ligand = n_bins // 2
     n_genes_ligand = n_bins_ligand + n_genes
@@ -302,14 +305,23 @@ def add_ligand_cells(path, sc_data, st_data, n_genes, n_bins, n_sc, lr):
 
     # Add new rows for all ligand single cells
     # Split by ligand cell type
-    for i in range(n_bins_ligand * n_sc_ligand):
+    for i in range(len(ligand_gene_expr)):
+        extend = [0 for k in range(n_bins_ligand)]
+        empty_row, j = ligand_gene_expr[i]   
+        extend[j] = average_non_zero
+        empty_row = np.concatenate([empty_row, extend], axis=0) 
+        empty_row = empty_row.reshape(1, -1)
+        gene_expr = np.concatenate([gene_expr, empty_row], axis=0)
+
+    while (st_data.X.shape[0] > gene_expr.shape[0]):
         empty_row = [0 for k in range(n_genes_ligand)]
-        gene = (i // n_sc_ligand) + n_genes
-        empty_row[gene] = average_non_zero          # average gene expression rate
+        #empty_row = empty_row.reshape(1, -1)
         gene_expr = np.concatenate([gene_expr, pd.DataFrame(empty_row).T], axis=0)
     
     sc_data = gene_expr_to_h5ad(gene_expr, path, n_sc + n_sc_ligand)
     st_data.X = gene_expr
+    df = pd.DataFrame(gene_expr)
+    df.to_csv("gene_expr.csv")
     return sc_data, st_data
 
 # Simulate spatial expression data with Gaussian process   
@@ -331,10 +343,10 @@ def simulate_spatial_expression_data(path, n_genes, n_bins, n_sc, T, lr):
     cell_groups = determine_cell_groups(st_data, sc_data)
 
     # Calculate Phi and Pi values for each spot
-    st_simu, sc_simu = determine_spot_cell_types(cell_groups, st_data, sc_data, xy, n_bins, n_spots, T, lr)
+    st_simu, sc_simu, ligand_gene_expr = determine_spot_cell_types(cell_groups, st_data, sc_data, xy, n_bins, n_spots, T, lr)
 
     # Plot the resulting graph
-    plot_spatial_data(st_data, st_simu, sc_data, sc_simu, cell_abundance)
+    #plot_spatial_data(st_data, st_simu, sc_data, sc_simu, cell_abundance)
 
     # Add ligand cells to gene expression matrix
-    sc_data, st_data = add_ligand_cells(path, sc_data, st_data, n_genes, n_bins, n_sc, lr)
+    sc_data, st_data = add_ligand_cells(path, sc_data, st_data, ligand_gene_expr, n_genes, n_bins, n_sc, lr)
