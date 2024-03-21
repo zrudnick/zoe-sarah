@@ -26,6 +26,7 @@ def to_dict(interaction_pairs):
         if interaction_type not in d:
             d[interaction_type] = []
         d[interaction_type].append((src, dest))
+        # print(d)
     return d
 
 # Use targets dictionary to write input_file_targets
@@ -116,6 +117,7 @@ def choose_target_ids(interaction_pairs, master_regs, n_master_regs):
             if dest not in target_ids:
                 target_ids[dest] = target_id
                 target_id += 1
+    # print(target_ids)
     return target_ids
 
 # Generate basal production rate for each cell (default 1.0 for every cell)
@@ -210,4 +212,4 @@ def input_file_format(path, hill_coeff, interaction_strength, basal_prod_type):
     # Calculate total number of genes
     n_genes = n_master_regs + len(genes)
 
-    return n_genes, n_master_regs, n_bins
+    return n_genes, n_master_regs, n_bins, target_ids
