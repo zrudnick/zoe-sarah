@@ -36,6 +36,15 @@ def steady_state_technical_noise(sim, expr, n_genes, n_master_regs):
 
     return gene_expr
 
+def steady_state_technical_no_noise(sim, expr, n_genes, n_master_regs):
+    # keep the code without noise
+    # Convert to UMI count
+    gene_expr = sim.convert_to_UMIcounts(expr)
+    # Make a 2d gene expression matrix
+    gene_expr = np.concatenate(gene_expr, axis = 1)
+
+    return gene_expr
+
 def add_dummy_counts(gene_expr, n_master_regs):
     dummy_i = n_master_regs//2
     for i in range(n_master_regs//2):

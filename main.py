@@ -43,7 +43,10 @@ def run_sergio(interaction_pairs, n_sc=300, hill_coeff=1.0, interaction_strength
     print("            Running SERGIO            ")
     print("--------------------------------------")
     sim, expr = steady_state_clean_data(n_genes, n_bins, n_sc)
-    gene_expr = steady_state_technical_noise(sim, expr, n_genes, n_master_regs)
+    # with noise 
+    #gene_expr = steady_state_technical_noise(sim, expr, n_genes, n_master_regs)
+    # without noise 
+    gene_expr = steady_state_technical_no_noise(sim, expr, n_genes, n_master_regs)
     #add_dummy_counts(gene_expr, n_master_regs) # use to join counts for cells close/far from ligand
     adata = gene_expr_to_h5ad_with_gene_names(gene_expr, ad_path, n_sc, target_ids)
 
