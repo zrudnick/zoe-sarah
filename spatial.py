@@ -153,6 +153,7 @@ def determine_spot_cell_types(cell_groups, st_data, sc_data, xy, n_bins, n_spots
     cell_type_index = None
     j = 0 # index for ligand placement
     k = 0 # index for ligand count
+    n = 0 # non-ligand count
     ligand_gene_expr = dict()
 
     # Choose cell type for each spot
@@ -164,14 +165,18 @@ def determine_spot_cell_types(cell_groups, st_data, sc_data, xy, n_bins, n_spots
 
         if (j % (lr + 1) == 1): # if a ligand should be placed
             receptor_cell_type, type_tags, type_list, type_sum = sample_ligand_cell(cell_groups, cell_type_index, n_bins)
-            ligand_gene_expr[k] = sc_data.X[i-1-j, :], receptor_cell_type
+            ligand_gene_expr[k] = sc_data.X[n-1, :], receptor_cell_type
             j += 1
-            k += 1
+            k += 1              # add to ligand count
         else:
             prob_in_spot = st_data.obsm["Pi Cell " + str(T)].iloc[i].values # put cells with similar receptor expression together
             choice = np.random.choice(n_bins, spot_size, p=prob_in_spot)
+
+            # if cell with expression is chosen, add to ligand placement count
             if choice < (n_bins // 2):
                 j += 1
+                n += 1
+
             cell_type_index = choice[0]
             type_tags, type_list, type_sum = sample_cell_type(cell_groups, cell_type_index, n_bins)
             
@@ -318,8 +323,14 @@ def add_ligand_cells(path, sc_data, st_data, ligand_gene_expr, n_genes, n_bins, 
     while (st_data.X.shape[0] > gene_expr.shape[0]):
         empty_row = [0 for k in range(n_genes_ligand)]
         gene = (i // n_sc_ligand) + n_genes
-        empty_row[gene] = average_non_zero          # average gene expression rate
+        # empty_row[gene] = average_non_zero          # average gene expression rate
         gene_expr = np.concatenate([gene_expr, pd.DataFrame(empty_row).T], axis=0)
+
+    while (st_data.X.shape[0] < gene_expr.shape[0]):
+        empty_row = [0 for k in range(n_genes_ligand)]
+        gene = (i // n_sc_ligand) + n_genes
+        # empty_row[gene] = average_non_zero          # average gene expression rate
+        st_data.X = np.concatenate([st_data.X, pd.DataFrame(empty_row).T], axis=0)
 
     sc_data = gene_expr_to_h5ad(gene_expr, path, n_sc + n_sc_ligand)
     # print("SC_DATA_DIM", sc_data)
